@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Configurações sensíveis
+config.ini
+bot_config.ini
+session_token.txt
+certs/*.key
+certs/*.pem
+certs/*.crt
+certs/*.p12
+certs/*.csr
+!certs/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Banco de dados
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak

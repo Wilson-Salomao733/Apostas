@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # Bot de Trading
+  betfair-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: betfair-trading-bot
+    image: betfair-trading-bot:latest
+    restart: unless-stopped
+    volumes:
+      # Certificados
+      - ./certs:/app/certs:ro
+      # Configurações
+      - ./config.ini:/app/config.ini:ro
+      - ./bot_config.ini:/app/bot_config.ini:ro
+      # Logs (compartilhado)
+      - ./logs:/app/logs
+      # Banco de dados (compartilhado e persistente)
+      - ./data:/app/data
+    environment:
+      - TZ=America/Sao_Paulo
+      - PYTHONUNBUFFERED=1
+    labels:
+      - "com.docker.compose.project=betfair-trading"
+      - "description=Bot de Trading Betfair - Time Decay Strategy"
+    networks:
+      - betfair-network
+    depends_on:
+      - dashboard-api
+
+  # Dashboard API
+  dashboard-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard-api
+    container_name: betfair-dashboard-api
+    image: betfair-dashboard-api:latest
+    restart: unless-stopped
+    ports:
+      - "8502:8502"
+    volumes:
+      # Certificados
+      - ./certs:/app/certs:ro
+      # Configurações
+      - ./config.ini:/app/config.ini:ro
+      # Logs (compartilhado)
+      - ./logs:/app/logs
+      # HTML
+      - ./dashboard.html:/app/dashboard.html:ro
+      # Banco de dados (compartilhado com o bot)
+      - ./data:/app/data
+      # Docker socket (permite controlar containers via botões do dashboard)
+      # ⚠️ ATENÇÃO: Montar socket Docker pode ser risco de segurança em ambientes compartilhados
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - TZ=America/Sao_Paulo
+      - PYTHONUNBUFFERED=1
+    networks:
+      - betfair-network
+
+networks:
+  betfair-network:
+    driver: bridge
+
+volumes:
+  # Volume nomeado para o banco de dados (backup facilitado)
+  betfair-data:
+    driver: local

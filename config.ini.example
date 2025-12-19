@@ -1,0 +1,20 @@
+[betfair]
+# Seu nome de usuário da Betfair
+username = seu_usuario_aqui
+
+# Sua senha da Betfair
+password = sua_senha_aqui
+
+# Application Key (obtenha em: https://developer.betfair.com/)
+app_key = sua_app_key_aqui
+
+# Caminho para o arquivo de certificado (.crt)
+cert_file = certs/client-2048.crt
+
+# Caminho para o arquivo de chave privada (.key)
+key_file = certs/client-2048.key
+
+# Jurisdição (com, com.au, it, es, ro)
+# Use 'com' para internacional, 'com.au' para Austrália, etc.
+jurisdiction = com
+

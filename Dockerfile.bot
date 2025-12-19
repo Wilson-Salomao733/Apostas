@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y \
+    openssl \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Definir diretório de trabalho
+WORKDIR /app
+
+# Copiar arquivos de requisitos
+COPY requirements.txt .
+
+# Instalar dependências Python
+RUN pip install --no-cache-dir --default-timeout=300 --retries=5 -r requirements.txt
+
+# Copiar código da aplicação
+COPY betfair_login.py .
+COPY betfair_api.py .
+COPY betfair_bot.py .
+COPY database.py .
+COPY migrate_to_database.py .
+COPY view_database.py .
+COPY docker-entrypoint-bot.sh .
+
+# Criar diretórios necessários
+RUN mkdir -p /app/certs /app/logs /app/data
+
+# Tornar entrypoint executável
+RUN chmod +x /app/docker-entrypoint-bot.sh
+
+# Definir variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1
+
+# Usar entrypoint para inicialização inteligente
+ENTRYPOINT ["/app/docker-entrypoint-bot.sh"]
+

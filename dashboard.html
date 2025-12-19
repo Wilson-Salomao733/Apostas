@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Betfair Trading Bot - Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #667eea;
+            --secondary: #764ba2;
+            --success: #2ecc71;
+            --danger: #e74c3c;
+            --warning: #f39c12;
+            --dark: #2c3e50;
+            --light: #ecf0f1;
+            --white: #ffffff;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1.1rem;
+        }
+
+        .controls {
+            background: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 25px;
+            font-weight: 600;
+        }
+
+        .status-online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 1rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-warning {
+            background: var(--warning);
+            color: white;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+
+        .metric-card h3 {
+            color: #7f8c8d;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+        }
+
+        .metric-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--dark);
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-card .delta {
+            font-size: 0.85rem;
+            color: var(--success);
+        }
+
+        .bets-section {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 2rem;
+        }
+
+        .bets-section h2 {
+            color: var(--dark);
+            margin-bottom: 1.5rem;
+            font-size: 1.8rem;
+        }
+
+        .bet-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            border-left: 5px solid var(--success);
+            transition: transform 0.2s;
+        }
+
+        .bet-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .bet-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+        }
+
+        .bet-info {
+            flex: 1;
+        }
+
+        .bet-info h3 {
+            color: var(--dark);
+            font-size: 1.3rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .bet-info .event-name {
+            color: #34495e;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .bet-info .market-type {
+            color: #7f8c8d;
+            font-size: 0.9rem;
+            margin-bottom: 0.3rem;
+        }
+
+        .bet-info .win-condition {
+            color: var(--success);
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-top: 0.5rem;
+            padding: 0.5rem;
+            background: rgba(46, 204, 113, 0.1);
+            border-radius: 5px;
+        }
+
+        .bet-info .game-time {
+            color: #7f8c8d;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+
+        .bet-metrics {
+            display: flex;
+            gap: 1.5rem;
+            text-align: center;
+        }
+
+        .bet-metric {
+            min-width: 100px;
+        }
+
+        .bet-metric .label {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+            margin-bottom: 0.3rem;
+        }
+
+        .bet-metric .value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--dark);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #7f8c8d;
+        }
+
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #7f8c8d;
+        }
+
+        .empty-state-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .stat-card h3 {
+            color: var(--dark);
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        .stat-item:last-child {
+            border-bottom: none;
+        }
+
+        .stat-item .label {
+            color: #7f8c8d;
+        }
+
+        .stat-item .value {
+            font-weight: 600;
+            color: var(--dark);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🤖 Betfair Trading Bot</h1>
+            <p>Dashboard de Monitoramento em Tempo Real</p>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div>
+                <span id="bot-status" class="status-badge status-offline">
+                    <span>🔴</span>
+                    <span>Bot Offline</span>
+                </span>
+                <span id="last-update" style="margin-left: 1rem; color: #7f8c8d; font-size: 0.9rem;"></span>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn btn-success" onclick="controlBot('start')">▶️ Iniciar</button>
+                <button class="btn btn-danger" onclick="controlBot('stop')">⏸️ Parar</button>
+                <button class="btn btn-warning" onclick="controlBot('restart')">🔄 Reiniciar</button>
+                <button class="btn btn-primary" onclick="updateData()">🔄 Atualizar Agora</button>
+            </div>
+        </div>
+
+        <!-- Metrics -->
+        <div class="metrics" id="metrics">
+            <div class="metric-card">
+                <h3>💰 Saldo Disponível</h3>
+                <div class="value" id="balance-available">R$ --</div>
+                <div class="delta">em caixa</div>
+            </div>
+            <div class="metric-card">
+                <h3>📈 Lucro Total</h3>
+                <div class="value" id="total-profit">R$ 0.00</div>
+                <div class="delta" id="profit-delta">0 net</div>
+            </div>
+            <div class="metric-card">
+                <h3>🎯 Total Apostas</h3>
+                <div class="value" id="total-bets">0</div>
+                <div class="delta" id="active-bets-delta">0 ativas</div>
+            </div>
+            <div class="metric-card">
+                <h3>✅ Taxa Sucesso</h3>
+                <div class="value" id="win-rate">0.0%</div>
+                <div class="delta" id="win-rate-delta">0/0</div>
+            </div>
+            <div class="metric-card">
+                <h3>💵 Lucro Médio</h3>
+                <div class="value" id="avg-profit">R$ 0.00</div>
+                <div class="delta">por aposta</div>
+            </div>
+        </div>
+
+        <!-- Active Bets -->
+        <div class="bets-section">
+            <h2>🎯 Suas Apostas Ativas</h2>
+            <div id="bets-container">
+                <div class="loading">Carregando apostas</div>
+            </div>
+        </div>
+
+        <!-- Bets History -->
+        <div class="bets-section">
+            <h2>📜 Histórico de Apostas</h2>
+            <div id="bets-history-container">
+                <div class="loading">Carregando histórico</div>
+            </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>📊 Estatísticas</h3>
+                <div class="stat-item">
+                    <span class="label">Total de Apostas:</span>
+                    <span class="value" id="stat-total-bets">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Apostas com Lucro:</span>
+                    <span class="value" id="stat-profit-bets">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Apostas com Perda:</span>
+                    <span class="value" id="stat-loss-bets">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Apostas Ativas:</span>
+                    <span class="value" id="stat-active-bets">0</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>⚽ Por Esporte</h3>
+                <div class="stat-item">
+                    <span class="label">⚽ Futebol:</span>
+                    <span class="value" id="stat-soccer">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">🏒 Hóquei:</span>
+                    <span class="value" id="stat-hockey">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">🎾 Tênis:</span>
+                    <span class="value" id="stat-tennis">0</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>💰 Conta</h3>
+                <div class="stat-item">
+                    <span class="label">Saldo Disponível:</span>
+                    <span class="value" id="stat-available">R$ --</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Saldo Total:</span>
+                    <span class="value" id="stat-total">R$ --</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Exposição:</span>
+                    <span class="value" id="stat-exposure">R$ 0.00</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Função para buscar dados da API
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/data');
+                if (!response.ok) throw new Error('Erro ao buscar dados');
+                return await response.json();
+            } catch (error) {
+                console.error('Erro:', error);
+                return null;
+            }
+        }
+
+        // Função para buscar informações do mercado
+        async function fetchMarketInfo(marketId) {
+            try {
+                const response = await fetch(`/api/market/${marketId}`);
+                if (!response.ok) throw new Error('Erro ao buscar info do mercado');
+                return await response.json();
+            } catch (error) {
+                console.error('Erro:', error);
+                return null;
+            }
+        }
+
+        // Função para atualizar dados
+        async function updateData() {
+            const updateEl = document.getElementById('last-update');
+            updateEl.textContent = 'Atualizando...';
+            
+            const data = await fetchData();
+            if (!data) {
+                updateEl.textContent = 'Erro ao atualizar';
+                return;
+            }
+
+            // Atualizar métricas
+            updateMetrics(data);
+            
+            // Atualizar apostas ativas
+            await updateBets(data.bets_active || data.bets || []);
+
+            // Atualizar histórico
+            await updateBetsHistory(data.bets_history || []);
+            
+            // Atualizar estatísticas
+            updateStats(data.stats || {});
+            
+            // Atualizar status do bot
+            updateBotStatus(data.bot_status || false);
+            
+            // Atualizar timestamp
+            const now = new Date();
+            updateEl.textContent = `Última atualização: ${now.toLocaleTimeString('pt-BR')}`;
+        }
+
+        // Atualizar métricas
+        function updateMetrics(data) {
+            const balance = data.balance || {};
+            const stats = data.stats || {};
+            
+            document.getElementById('balance-available').textContent = 
+                balance.available ? `R$ ${balance.available.toFixed(2)}` : 'R$ --';
+            
+            // Calcular lucro total das apostas fechadas
+            let totalProfit = parseFloat(stats.total_profit || 0);
+            
+            // Se não tiver no stats, calcular das apostas fechadas
+            if (totalProfit === 0 && data.bets_history) {
+                totalProfit = data.bets_history.reduce((sum, bet) => {
+                    if (bet.profit_loss !== null && bet.profit_loss !== undefined && bet.size) {
+                        const profit = parseFloat(bet.size) * (parseFloat(bet.profit_loss) / 100);
+                        return sum + profit;
+                    }
+                    return sum;
+                }, 0);
+            }
+            
+            document.getElementById('total-profit').textContent = 
+                `R$ ${totalProfit.toFixed(2)}`;
+            
+            const profitBets = parseInt(stats.profit_bets || 0);
+            const lossBets = parseInt(stats.loss_bets || 0);
+            document.getElementById('profit-delta').textContent = 
+                `${profitBets - lossBets} net`;
+            
+            document.getElementById('total-bets').textContent = stats.total_bets || 0;
+            document.getElementById('active-bets-delta').textContent = 
+                `${stats.active_bets || 0} ativas`;
+            
+            // Taxa de sucesso: apenas apostas fechadas
+            const closedBets = profitBets + lossBets;
+            const winRate = closedBets > 0 
+                ? ((profitBets / closedBets) * 100).toFixed(1)
+                : 0;
+            document.getElementById('win-rate').textContent = `${winRate}%`;
+            document.getElementById('win-rate-delta').textContent = 
+                `${profitBets}/${closedBets}`;
+            
+            // Lucro médio: apenas apostas fechadas
+            const avgProfit = closedBets > 0 
+                ? (totalProfit / closedBets).toFixed(2)
+                : 0;
+            document.getElementById('avg-profit').textContent = `R$ ${avgProfit}`;
+        }
+
+        // Atualizar apostas
+        async function updateBets(bets) {
+            const container = document.getElementById('bets-container');
+            
+            if (!bets || bets.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <p>Nenhuma aposta ativa no momento</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Filtrar apostas sem nome válido
+            const validBets = [];
+            for (const bet of bets) {
+                // Verificar se tem nome válido
+                const eventName = bet.event_name || '';
+                const hasValidName = eventName && 
+                                   eventName !== '' && 
+                                   eventName !== 'N/A' && 
+                                   eventName !== 'Nome não disponível' &&
+                                   !eventName.toLowerCase().includes('carregando');
+                
+                if (hasValidName) {
+                    validBets.push(bet);
+                }
+            }
+
+            if (validBets.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <p>Nenhuma aposta ativa com informações completas no momento</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `<p style="margin-bottom: 1rem; color: #7f8c8d;"><strong>${validBets.length} apostas ativas encontradas</strong></p>`;
+            
+            for (const bet of validBets) {
+                // Usar event_name do banco de dados diretamente, só buscar da API se não existir
+                let marketInfo = null;
+                if (!bet.event_name || bet.event_name === '' || bet.event_name === 'N/A') {
+                    marketInfo = await fetchMarketInfo(bet.market_id);
+                }
+                const betCard = createBetCard(bet, marketInfo);
+                container.appendChild(betCard);
+            }
+        }
+
+        // Atualizar histórico de apostas (somente mercados já encerrados)
+        async function updateBetsHistory(bets) {
+            const container = document.getElementById('bets-history-container');
+            
+            if (!bets || bets.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📂</div>
+                        <p>Nenhuma aposta encerrada encontrada</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `<p style="margin-bottom: 1rem; color: #7f8c8d;"><strong>${bets.length} apostas encerradas encontradas</strong></p>`;
+            
+            for (const bet of bets) {
+                // Usar event_name do banco de dados diretamente, só buscar da API se não existir
+                let marketInfo = null;
+                if (!bet.event_name || bet.event_name === '' || bet.event_name === 'N/A') {
+                    marketInfo = await fetchMarketInfo(bet.market_id);
+                }
+                const betCard = createBetCard(bet, marketInfo);
+                // Marcar visualmente como histórico
+                betCard.style.opacity = '0.8';
+                betCard.style.borderLeftColor = '#7f8c8d';
+                container.appendChild(betCard);
+            }
+        }
+
+        // Criar card de aposta
+        function createBetCard(bet, marketInfo) {
+            const card = document.createElement('div');
+            card.className = 'bet-card';
+            
+            // Usar sport do banco de dados se disponível, senão detectar pelo selection_id
+            let sport = '⚽ Futebol';
+            let isSoccer = true;
+            let marketType = 'Under 4.5 Goals';
+            
+            if (bet.sport) {
+                const sportUpper = bet.sport.toUpperCase();
+                if (sportUpper.includes('SOCCER') || sportUpper.includes('FUTEBOL')) {
+                    sport = '⚽ Futebol';
+                    isSoccer = true;
+                    // Usar strategy do banco ou padrão Under 4.5
+                    if (bet.strategy && bet.strategy.includes('Under')) {
+                        marketType = bet.strategy.replace('Back ', '').replace('Back', '');
+                    } else {
+                        marketType = 'Under 4.5 Goals';
+                    }
+                } else if (sportUpper.includes('TENNIS') || sportUpper.includes('TÊNIS')) {
+                    sport = '🎾 Tênis';
+                    isSoccer = false;
+                    marketType = bet.strategy || 'Match Odds';
+                } else if (sportUpper.includes('HOCKEY') || sportUpper.includes('HÓQUEI')) {
+                    sport = '🏒 Hóquei';
+                    isSoccer = false;
+                    marketType = bet.strategy || 'Total Goals';
+                }
+            } else {
+                // Fallback: detectar pelo selection_id (código antigo)
+                const selectionId = bet.selection_id || bet.selectionId;
+                isSoccer = selectionId == 47972 || selectionId == '47972';
+                sport = isSoccer ? '⚽ Futebol' : '🎾 Tênis';
+                marketType = isSoccer ? 'Under 4.5 Goals' : 'Match Odds';
+            }
+            // Verificar se é BACK ou LAY
+            const isBack = bet.side === 'BACK' || !bet.side || bet.side === 'N/A';
+            // Determinar mensagem de condição de vitória baseado no marketType
+            let winCondition = '';
+            if (isSoccer) {
+                if (isBack) {
+                    // Verificar se é Under 4.5 ou Under 2.5 baseado no marketType
+                    if (marketType.includes('4.5')) {
+                        winCondition = 'Para GANHAR: O jogo deve ter MENOS de 4.5 gols (0, 1, 2, 3 ou 4 gols) ✅';
+                    } else if (marketType.includes('2.5')) {
+                        winCondition = 'Para GANHAR: O jogo deve ter MENOS de 2.5 gols (0, 1 ou 2 gols) ✅';
+                    } else {
+                        winCondition = 'Para GANHAR: O jogo deve ter MENOS de 4.5 gols (0, 1, 2, 3 ou 4 gols) ✅';
+                    }
+                } else {
+                    if (marketType.includes('4.5')) {
+                        winCondition = 'Para GANHAR: O jogo deve ter 5 ou MAIS gols ⚠️';
+                    } else {
+                        winCondition = 'Para GANHAR: O jogo deve ter 3 ou MAIS gols ⚠️';
+                    }
+                }
+            } else {
+                winCondition = 'Para GANHAR: O favorito deve vencer o jogo';
+            }
+            
+            // Priorizar event_name do banco de dados, depois marketInfo da API, por último fallback
+            const eventName = bet.event_name || marketInfo?.event_name || 'Nome não disponível';
+            const startTime = marketInfo?.start_time || bet.placed_date;
+            let timeRange = 'Horário não disponível';
+            
+            if (startTime && startTime !== 'N/A') {
+                try {
+                    const start = new Date(startTime);
+                    const end = new Date(start);
+                    if (isSoccer) {
+                        end.setMinutes(end.getMinutes() + 105); // 90min + intervalo
+                    }
+                    timeRange = `${start.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})} - ${end.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})}`;
+                } catch (e) {
+                    timeRange = 'Horário não disponível';
+                }
+            }
+            
+            const price = bet.price || bet.priceSize?.price || 'N/A';
+            const size = bet.size || bet.priceSize?.size || 'N/A';
+            const liability = bet.side === 'LAY' && price !== 'N/A' && size !== 'N/A'
+                ? (parseFloat(size) * (parseFloat(price) - 1)).toFixed(2)
+                : '0.00';
+            
+            const placedDate = bet.placed_date || bet.placedDate;
+            let dateStr = '--';
+            if (placedDate && placedDate !== 'N/A') {
+                try {
+                    const date = new Date(placedDate);
+                    dateStr = date.toLocaleString('pt-BR');
+                } catch (e) {}
+            }
+            
+            // Verificar se é aposta fechada e mostrar resultado
+            const isClosed = bet.status && bet.status !== 'ACTIVE' && bet.status !== 'active';
+            let resultBadge = '';
+            let resultColor = '';
+            let profitValue = 0;
+            
+            if (isClosed) {
+                if (bet.profit_loss !== null && bet.profit_loss !== undefined) {
+                    const profitLoss = parseFloat(bet.profit_loss);
+                    const stake = parseFloat(bet.size || bet.stake || 0);
+                    profitValue = stake * (profitLoss / 100);
+                    
+                    if (profitLoss > 0) {
+                        resultBadge = `✅ Ganhou: +R$ ${profitValue.toFixed(2)} (+${profitLoss.toFixed(2)}%)`;
+                        resultColor = '#27ae60';
+                    } else if (profitLoss < 0) {
+                        resultBadge = `❌ Perdeu: -R$ ${Math.abs(profitValue).toFixed(2)} (${profitLoss.toFixed(2)}%)`;
+                        resultColor = '#e74c3c';
+                    } else {
+                        resultBadge = `⚪ Empate: R$ 0.00 (0%)`;
+                        resultColor = '#95a5a6';
+                    }
+                } else {
+                    // Se não tem profit_loss mas está fechada, mostrar status
+                    if (bet.status.includes('PROFIT')) {
+                        resultBadge = `✅ Ganhou`;
+                        resultColor = '#27ae60';
+                    } else if (bet.status.includes('LOSS')) {
+                        resultBadge = `❌ Perdeu`;
+                        resultColor = '#e74c3c';
+                    }
+                }
+                if (bet.close_reason) {
+                    resultBadge += ` - ${bet.close_reason}`;
+                }
+            }
+            
+            card.innerHTML = `
+                <div class="bet-header">
+                    <div class="bet-info">
+                        <h3>${sport}</h3>
+                        <div class="event-name">${eventName}</div>
+                        <div class="market-type">📊 Mercado: ${marketType} (${bet.side || 'BACK'})</div>
+                        <div class="win-condition">✅ ${winCondition}</div>
+                        ${isClosed && resultBadge ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: ${resultColor}20; border-radius: 5px; color: ${resultColor}; font-weight: 600; font-size: 0.9rem;">${resultBadge}</div>` : ''}
+                        <div class="game-time">⏰ Horário: ${timeRange}</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.75rem; color: #95a5a6;">
+                            Market ID: ${bet.market_id} | Bet ID: ${bet.bet_id?.substring(0, 12)}...
+                        </div>
+                    </div>
+                    <div class="bet-metrics">
+                        <div class="bet-metric">
+                            <div class="label">💰 Stake</div>
+                            <div class="value">R$ ${size}</div>
+                            ${bet.side === 'LAY' ? `<div style="font-size: 0.75rem; color: #e74c3c; margin-top: 0.3rem;">Liab: R$ ${liability}</div>` : ''}
+                            ${isClosed && profitValue !== 0 ? `<div style="font-size: 0.75rem; color: ${profitValue > 0 ? '#27ae60' : '#e74c3c'}; margin-top: 0.3rem; font-weight: 600;">${profitValue > 0 ? '+' : ''}R$ ${profitValue.toFixed(2)}</div>` : ''}
+                        </div>
+                        <div class="bet-metric">
+                            <div class="label">📊 Odd</div>
+                            <div class="value">${price}</div>
+                            <div style="font-size: 0.75rem; color: ${isClosed ? (bet.profit_loss > 0 ? '#27ae60' : bet.profit_loss < 0 ? '#e74c3c' : '#95a5a6') : '#27ae60'}; margin-top: 0.3rem;">
+                                ${isClosed ? (bet.profit_loss > 0 ? '✅ Fechada' : bet.profit_loss < 0 ? '❌ Fechada' : '⚪ Fechada') : '✅ Executada'}
+                            </div>
+                        </div>
+                        <div class="bet-metric">
+                            <div class="label">📅 Data</div>
+                            <div class="value" style="font-size: 0.9rem;">${dateStr}</div>
+                            ${bet.close_time ? `<div style="font-size: 0.7rem; color: #95a5a6; margin-top: 0.2rem;">Fechada: ${new Date(bet.close_time).toLocaleString('pt-BR')}</div>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            return card;
+        }
+
+        // Atualizar estatísticas
+        function updateStats(stats) {
+            document.getElementById('stat-total-bets').textContent = stats.total_bets || 0;
+            document.getElementById('stat-profit-bets').textContent = stats.profit_bets || 0;
+            document.getElementById('stat-loss-bets').textContent = stats.loss_bets || 0;
+            document.getElementById('stat-active-bets').textContent = stats.active_bets || 0;
+            document.getElementById('stat-soccer').textContent = stats.soccer_bets || 0;
+            document.getElementById('stat-hockey').textContent = stats.hockey_bets || 0;
+            document.getElementById('stat-tennis').textContent = stats.tennis_bets || 0;
+        }
+
+        // Atualizar status do bot
+        function updateBotStatus(isOnline) {
+            const statusEl = document.getElementById('bot-status');
+            if (isOnline) {
+                statusEl.className = 'status-badge status-online';
+                statusEl.innerHTML = '<span>🟢</span><span>Bot Online</span>';
+            } else {
+                statusEl.className = 'status-badge status-offline';
+                statusEl.innerHTML = '<span>🔴</span><span>Bot Offline</span>';
+            }
+        }
+
+        // Verificar disponibilidade do Docker
+        async function checkDockerAvailability() {
+            try {
+                const response = await fetch('/api/bot/status');
+                const result = await response.json();
+                
+                const buttons = document.querySelectorAll('.btn-success, .btn-danger, .btn-warning');
+                if (result.can_control) {
+                    buttons.forEach(btn => {
+                        btn.disabled = false;
+                        btn.style.opacity = '1';
+                    });
+                } else {
+                    buttons.forEach(btn => {
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        btn.title = 'Docker não disponível. Execute comandos manualmente no terminal.';
+                    });
+                }
+            } catch (error) {
+                console.error('Erro ao verificar Docker:', error);
+            }
+        }
+
+        // Controlar bot
+        async function controlBot(action) {
+            try {
+                const response = await fetch(`/api/bot/${action}`, { method: 'POST' });
+                const result = await response.json();
+                if (result.success) {
+                    const actionText = action === 'start' ? 'iniciado' : action === 'stop' ? 'parado' : 'reiniciado';
+                    alert(`✅ Bot ${actionText} com sucesso!`);
+                    setTimeout(updateData, 2000);
+                } else {
+                    const errorMsg = result.message || 'Não foi possível executar a ação';
+                    alert(`❌ Erro: ${errorMsg}\n\nExecute manualmente no terminal:\ndocker compose -f docker-compose-completo.yml ${action} betfair-bot`);
+                }
+            } catch (error) {
+                alert(`❌ Erro ao controlar bot: ${error.message}\n\nExecute manualmente no terminal:\ndocker compose -f docker-compose-completo.yml ${action} betfair-bot`);
+            }
+        }
+
+        // Carregar dados iniciais
+        updateData();
+        checkDockerAvailability();
+        
+        // Verificar Docker a cada 30 segundos
+        setInterval(checkDockerAvailability, 30000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+FROM python:3.11-slim
+
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y \
+    openssl \
+    curl \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Docker CLI (para controlar containers via socket)
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Definir diretório de trabalho
+WORKDIR /app
+
+# Copiar arquivos de requisitos
+COPY requirements.txt .
+
+    # Instalar dependências Python com timeout aumentado e retries
+    # Instalar pip atualizado primeiro
+    RUN pip install --upgrade pip setuptools wheel
+    # Instalar dependências com timeout maior e retries
+    RUN pip install --no-cache-dir --default-timeout=600 --retries=10 -r requirements.txt || \
+        (sleep 10 && pip install --no-cache-dir --default-timeout=600 --retries=10 -r requirements.txt)
+
+# Copiar código da aplicação
+COPY betfair_login.py .
+COPY betfair_api.py .
+COPY dashboard_api.py .
+COPY dashboard.html .
+COPY database.py .
+
+# Criar diretórios necessários
+RUN mkdir -p /app/certs /app/logs /app/data
+
+# Definir variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1
+
+# Expor porta
+EXPOSE 8502
+
+# Comando padrão - executar a API
+CMD ["python", "dashboard_api.py"]
