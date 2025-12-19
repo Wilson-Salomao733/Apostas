@@ -320,3 +320,4 @@ markets = api.list_market_catalogue(
 
 Este projeto é fornecido como está, apenas para fins educacionais e de integração com a API Betfair.
 
+# Apostas
