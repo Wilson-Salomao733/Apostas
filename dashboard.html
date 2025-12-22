@@ -902,6 +902,18 @@
                         </div>
                     </div>
                 </div>
+                ${!isClosed ? `
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #ecf0f1; text-align: center;">
+                    <button 
+                        class="btn btn-warning" 
+                        onclick="cancelBet('${bet.market_id}', '${bet.bet_id}', this)"
+                        style="padding: 0.5rem 1.5rem; font-size: 0.9rem; background: #f39c12; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: 600;"
+                        onmouseover="this.style.background='#e67e22'"
+                        onmouseout="this.style.background='#f39c12'">
+                        💰 Cancelar Aposta (Cash Out)
+                    </button>
+                </div>
+                ` : ''}
             `;
             
             return card;

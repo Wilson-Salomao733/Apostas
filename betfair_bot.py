@@ -521,6 +521,12 @@ class BetfairTradingBot:
                 logger.debug(f"Mercado {market_id}: Preço inválido: {current_price}")
                 return None
             
+            # ✅ VERIFICAR ODD MÍNIMA: apenas apostar se odd > 1.30
+            min_odd = 1.30
+            if current_price <= min_odd:
+                logger.info(f"💰 Mercado {market_id}: Odd muito baixa ({current_price:.2f} <= {min_odd:.2f}) - aguardando odd maior")
+                return None
+            
             # Verificar liquidez suficiente
             if available_size < self.stake:
                 logger.info(f"⚠️ Mercado {market_id}: Liquidez insuficiente: {available_size:.2f} < {self.stake:.2f}")
