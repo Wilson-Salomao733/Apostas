@@ -8,13 +8,14 @@ import time
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
 from betfair_api import BetfairAPI
 from configparser import ConfigParser
 from database import BetDatabase
+from telegram_notifier import TelegramNotifier
 
         # Configurar logging
 logging.basicConfig(
@@ -140,6 +141,15 @@ class BetfairTradingBot:
         if len(self.active_bets) > 0:
             active_count = sum(1 for b in self.active_bets.values() if b.status == BetStatus.ACTIVE)
             logger.info(f"✓ Carregadas {active_count} apostas ativas do arquivo de persistência")
+        
+        # Inicializar notificador do Telegram
+        try:
+            self.telegram = TelegramNotifier(bot_config_file)
+            if self.telegram.enabled:
+                logger.info("✓ Notificações do Telegram habilitadas")
+        except Exception as e:
+            logger.warning(f"Erro ao inicializar Telegram: {e}")
+            self.telegram = None
     
     def load_active_bets(self) -> Dict[str, ActiveBet]:
         """Carrega apostas ativas do banco de dados"""
@@ -349,21 +359,90 @@ class BetfairTradingBot:
             return []
     
     def get_match_time(self, market_id: str) -> Optional[int]:
-        """Obtém o tempo de jogo em minutos (aproximado)"""
+        """Obtém o tempo de jogo em minutos (aproximado) baseado no tempo decorrido desde o início do mercado"""
         try:
-            market_book = self.api.list_market_book(
-                market_ids=[market_id],
-                price_projection={'priceData': ['EX_BEST_OFFERS']}
+            # Buscar informações do mercado para obter o horário de início
+            filter_dict = {
+                'marketIds': [market_id]
+            }
+            
+            markets = self.api.list_market_catalogue(
+                filter_dict=filter_dict,
+                market_projection=['MARKET_START_TIME', 'EVENT'],
+                max_results=1
             )
             
-            if market_book:
-                # A Betfair não fornece tempo diretamente na API básica
-                # Isso seria necessário via Stream API
-                # Por enquanto, retornamos None e usamos timestamp de entrada
+            if not markets or len(markets) == 0:
+                logger.debug(f"Mercado {market_id}: Não encontrado no catálogo")
                 return None
+            
+            market = markets[0]
+            market_start_time_str = market.get('marketStartTime')
+            
+            if not market_start_time_str:
+                logger.debug(f"Mercado {market_id}: Sem horário de início")
+                return None
+            
+            # Converter para datetime (formato ISO 8601 da Betfair: "2024-01-20T15:30:00.000Z")
+            try:
+                # Remover milissegundos e Z se presente, adicionar timezone se necessário
+                time_str = market_start_time_str.replace('Z', '+00:00')
+                if '.' in time_str:
+                    # Remover milissegundos
+                    time_str = time_str.split('.')[0] + time_str.split('.')[1].split('+')[0] + ('+' + time_str.split('+')[1] if '+' in time_str else '')
+                
+                # Tentar parse ISO format
+                try:
+                    market_start_time = datetime.fromisoformat(time_str)
+                except ValueError:
+                    # Fallback: tentar parse manual
+                    # Formato esperado: "2024-01-20T15:30:00+00:00" ou "2024-01-20T15:30:00"
+                    if 'T' in time_str:
+                        date_part, time_part = time_str.split('T')
+                        time_part = time_part.split('+')[0].split('-')[0]  # Remover timezone
+                        year, month, day = date_part.split('-')
+                        hour, minute, second = time_part.split(':')
+                        market_start_time = datetime(
+                            int(year), int(month), int(day),
+                            int(hour), int(minute), int(float(second)),
+                            tzinfo=timezone.utc
+                        )
+                    else:
+                        raise ValueError(f"Formato de data não reconhecido: {time_str}")
+                
+                # Obter tempo atual (com timezone se o market_start_time tiver)
+                if market_start_time.tzinfo:
+                    now = datetime.now(market_start_time.tzinfo)
+                else:
+                    now = datetime.now()
+                
+                # Calcular tempo decorrido em minutos
+                elapsed = (now - market_start_time).total_seconds() / 60
+                
+                # Retornar apenas se o jogo já começou (tempo positivo)
+                if elapsed > 0:
+                    return int(elapsed)
+                else:
+                    logger.debug(f"Mercado {market_id}: Jogo ainda não começou (tempo: {elapsed:.1f} min)")
+                    return None
+                    
+            except Exception as e:
+                logger.debug(f"Erro ao calcular tempo do jogo {market_id}: {e}")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Erro ao obter tempo de jogo para {market_id}: {e}")
+            return None
+    
+    def get_match_score(self, market_id: str) -> Optional[Dict[str, int]]:
+        """Tenta obter o placar do jogo (retorna None se não conseguir)"""
+        try:
+            # A Betfair não fornece placar diretamente na API básica
+            # Isso seria necessário via Stream API ou API de resultados
+            # Por enquanto, retornamos None (será tratado como "desconhecido")
+            return None
         except:
-            pass
-        return None
+            return None
     
     def check_soccer_entry_conditions(self, market_id: str, under_runner_id: int = None) -> Optional[Dict]:
         """Verifica condições de entrada para futebol"""
@@ -444,7 +523,7 @@ class BetfairTradingBot:
             
             # Verificar liquidez suficiente
             if available_size < self.stake:
-                logger.debug(f"Mercado {market_id}: Liquidez insuficiente: {available_size} < {self.stake}")
+                logger.info(f"⚠️ Mercado {market_id}: Liquidez insuficiente: {available_size:.2f} < {self.stake:.2f}")
                 return None
             
             # Verificar se já temos aposta ativa neste mercado
@@ -457,7 +536,7 @@ class BetfairTradingBot:
             soccer_bets_count = sum(1 for b in self.active_bets.values() 
                                   if b.sport == SportType.SOCCER and b.status == BetStatus.ACTIVE)
             if soccer_bets_count >= self.max_bets_per_sport:
-                logger.debug(f"Limite de apostas de futebol atingido: {soccer_bets_count}/{self.max_bets_per_sport}")
+                logger.info(f"⚠️ Limite de apostas de futebol atingido: {soccer_bets_count}/{self.max_bets_per_sport}")
                 return None
             
             # Verificar saldo disponível antes de fazer aposta BACK
@@ -465,8 +544,47 @@ class BetfairTradingBot:
             balance = self.get_account_balance()
             if balance:
                 if balance['available'] < self.stake:
-                    logger.debug(f"Mercado {market_id}: Saldo insuficiente. Disponível: {balance['available']:.2f}, Necessário: {self.stake:.2f}")
+                    logger.warning(f"⚠️ Mercado {market_id}: Saldo insuficiente. Disponível: R$ {balance['available']:.2f}, Necessário: R$ {self.stake:.2f}")
                     return None
+            else:
+                logger.warning(f"⚠️ Mercado {market_id}: Não foi possível verificar saldo")
+                return None
+            
+            # ✅ VERIFICAR TEMPO DE JOGO (entry_min_minute e entry_max_minute)
+            match_time = self.get_match_time(market_id)
+            if match_time is None:
+                logger.debug(f"Mercado {market_id}: Não foi possível obter tempo de jogo - pulando verificação de tempo")
+                # Se não conseguir obter o tempo, podemos continuar (mas não é ideal)
+                # Em produção, você pode querer retornar None aqui para ser mais conservador
+            else:
+                min_minute = self.soccer_config['entry_min_minute']
+                max_minute = self.soccer_config['entry_max_minute']
+                
+                if match_time < min_minute:
+                    logger.info(f"⏱️ Mercado {market_id}: Jogo muito cedo ({match_time} min < {min_minute} min) - aguardando janela de entrada")
+                    return None
+                
+                if match_time > max_minute:
+                    logger.info(f"⏱️ Mercado {market_id}: Jogo muito avançado ({match_time} min > {max_minute} min) - janela de entrada passou")
+                    return None
+                
+                logger.info(f"⏱️ Mercado {market_id}: Tempo de jogo OK ({match_time} min) - dentro da janela [{min_minute}-{max_minute} min]")
+            
+            # ✅ VERIFICAR PLACAR (idealmente 0-0 ou baixo)
+            # Nota: A Betfair não fornece placar diretamente na API básica
+            # Se você tiver acesso à Stream API, pode adicionar essa verificação aqui
+            # Por enquanto, vamos confiar apenas na verificação de tempo
+            match_score = self.get_match_score(market_id)
+            if match_score:
+                home_score = match_score.get('home', 0)
+                away_score = match_score.get('away', 0)
+                total_goals = home_score + away_score
+                
+                # Se o placar já tem muitos gols, não apostar
+                if total_goals >= 2:
+                    logger.info(f"⚽ Mercado {market_id}: Placar {home_score}-{away_score} - muitos gols já marcados, pulando")
+                    return None
+                logger.info(f"⚽ Mercado {market_id}: Placar {home_score}-{away_score} - OK para apostar")
             
             # Obter selection_id - pode estar em 'id' ou 'selectionId'
             selection_id = under_runner.get('id') or under_runner.get('selectionId')
@@ -475,11 +593,13 @@ class BetfairTradingBot:
                 return None
             
             # Condições atendidas! Retornar dados para aposta
-            logger.info(f"✓ Condições de entrada atendidas para mercado {market_id}: Price {current_price}, Selection ID: {selection_id}")
+            time_info = f" (Tempo: {match_time} min)" if match_time is not None else ""
+            logger.info(f"✓ Condições de entrada atendidas para mercado {market_id}: Price {current_price}, Selection ID: {selection_id}{time_info}")
             return {
                 'runner': under_runner,
                 'price': current_price,
                 'selection_id': selection_id,
+                'match_time': match_time,
             }
         except Exception as e:
             logger.error(f"Erro ao verificar condições de futebol para {market_id}: {e}", exc_info=True)
@@ -943,23 +1063,43 @@ class BetfairTradingBot:
     def process_soccer_strategy(self):
         """Processa estratégia de futebol"""
         if not self.soccer_config['enabled']:
+            logger.debug("Estratégia de futebol desabilitada")
             return
         
+        logger.info("🔍 Buscando partidas de futebol ao vivo...")
         matches = self.find_live_soccer_matches()
-        logger.info(f"Encontradas {len(matches)} partidas de futebol ao vivo")
+        logger.info(f"📊 Encontradas {len(matches)} partidas de futebol ao vivo")
+        
+        if len(matches) == 0:
+            logger.debug("Nenhuma partida de futebol encontrada no momento")
         
         matches_checked = 0
         matches_with_conditions = 0
         
+        # Verificar saldo antes de processar
+        balance = self.get_account_balance()
+        if balance:
+            logger.info(f"💰 Saldo disponível: R$ {balance['available']:.2f} | Stake necessário: R$ {self.stake:.2f}")
+            if balance['available'] < self.stake:
+                logger.warning(f"⚠️ Saldo insuficiente! Disponível: R$ {balance['available']:.2f}, Necessário: R$ {self.stake:.2f}")
+        
+        # Verificar limite de apostas
+        soccer_bets_count = sum(1 for b in self.active_bets.values() 
+                              if b.sport == SportType.SOCCER and b.status == BetStatus.ACTIVE)
+        logger.info(f"📈 Apostas ativas de futebol: {soccer_bets_count}/{self.max_bets_per_sport}")
+        
         for match in matches[:20]:  # Limitar a 20 para não sobrecarregar
             market_id = match['market_id']
             under_runner_id = match.get('under_runner_id')
+            event_name = match.get('event_name', 'N/A')
             matches_checked += 1
             
+            logger.debug(f"Verificando mercado {market_id}: {event_name}")
             entry_conditions = self.check_soccer_entry_conditions(market_id, under_runner_id)
             
             if entry_conditions:
                 matches_with_conditions += 1
+                logger.info(f"✅ Condições atendidas para {event_name} - Price: {entry_conditions['price']:.2f}")
                 # Fazer aposta BACK (a favor de Under 4.5 Goals)
                 bet_id = self.place_back_bet(
                     market_id=market_id,
@@ -1012,11 +1152,31 @@ class BetfairTradingBot:
                     
                     logger.info(f"✓✓✓ NOVA APOSTA FUTEBOL (BACK Under 4.5): {match['event_name']} - Price {entry_conditions['price']:.2f} - Stake R$ {self.stake:.2f}")
                     logger.info(f"   → Você GANHA se o jogo tiver MENOS de 4.5 gols (0, 1, 2, 3 ou 4 gols)")
+                    
+                    # Enviar notificação do Telegram
+                    if self.telegram and self.telegram.enabled:
+                        try:
+                            balance = self.get_account_balance()
+                            bet_info = {
+                                'bet_id': bet_id,
+                                'event_name': match.get('event_name', ''),
+                                'sport': SportType.SOCCER.name,
+                                'strategy': "Back Under 4.5",
+                                'side': "BACK",
+                                'entry_price': entry_conditions['price'],
+                                'stake': self.stake,
+                                'liability': 0.0,
+                            }
+                            self.telegram.notify_new_bet(bet_info, balance)
+                        except Exception as e:
+                            logger.warning(f"Erro ao enviar notificação do Telegram: {e}")
                 else:
                     logger.warning(f"✗ Falha ao colocar aposta BACK para {match['event_name']}")
         
         if matches_checked > 0:
-            logger.debug(f"Futebol: {matches_checked} mercados verificados, {matches_with_conditions} com condições atendidas")
+            logger.info(f"📊 Futebol: {matches_checked} mercados verificados, {matches_with_conditions} com condições atendidas")
+        else:
+            logger.debug("Nenhum mercado de futebol foi verificado nesta iteração")
     
     def check_hockey_entry_conditions(self, market_id: str) -> Optional[Dict]:
         """Verifica condições de entrada para hóquei"""
@@ -1136,6 +1296,24 @@ class BetfairTradingBot:
                     })
                     
                     logger.info(f"✓ Nova aposta Hóquei: {match['event_name']} - Price {entry_conditions['price']}")
+                    
+                    # Enviar notificação do Telegram
+                    if self.telegram and self.telegram.enabled:
+                        try:
+                            balance = self.get_account_balance()
+                            bet_info = {
+                                'bet_id': bet_id,
+                                'event_name': match.get('event_name', ''),
+                                'sport': SportType.ICE_HOCKEY.name,
+                                'strategy': "Lay Under Period",
+                                'side': "LAY",
+                                'entry_price': entry_conditions['price'],
+                                'stake': self.stake,
+                                'liability': liability,
+                            }
+                            self.telegram.notify_new_bet(bet_info, balance)
+                        except Exception as e:
+                            logger.warning(f"Erro ao enviar notificação do Telegram: {e}")
     
     def process_tennis_strategy(self):
         """Processa estratégia de tênis"""
@@ -1311,6 +1489,24 @@ class BetfairTradingBot:
                     })
                     
                     logger.info(f"✓ Nova aposta Tênis: {match['event_name']} - Favorite {current_price}")
+                    
+                    # Enviar notificação do Telegram
+                    if self.telegram and self.telegram.enabled:
+                        try:
+                            balance = self.get_account_balance()
+                            bet_info = {
+                                'bet_id': bet_id,
+                                'event_name': match.get('event_name', ''),
+                                'sport': SportType.TENNIS.name,
+                                'strategy': "Back Favorite",
+                                'side': "BACK",
+                                'entry_price': current_price,
+                                'stake': self.stake,
+                                'liability': 0.0,
+                            }
+                            self.telegram.notify_new_bet(bet_info, balance)
+                        except Exception as e:
+                            logger.warning(f"Erro ao enviar notificação do Telegram: {e}")
             except Exception as e:
                 logger.error(f"Erro ao processar partida de tênis {match.get('event_name', 'N/A')}: {e}")
                 continue
@@ -1391,24 +1587,36 @@ class BetfairTradingBot:
     
     def run(self):
         """Loop principal do bot"""
-        logger.info("Bot iniciado - Procurando oportunidades...")
+        logger.info("=" * 60)
+        logger.info("🤖 Bot iniciado - Procurando oportunidades...")
+        logger.info("=" * 60)
         
         while True:
             try:
+                cycle_start = datetime.now()
+                logger.info(f"\n🔄 Ciclo #{self.bet_counter + 1} - {cycle_start.strftime('%H:%M:%S')}")
+                
                 # Verificar login
                 if not self.api.session_token:
-                    logger.warning("Token não encontrado, fazendo login...")
+                    logger.warning("⚠️ Token não encontrado, fazendo login...")
                     if not self.api.login():
-                        logger.error("Falha no login. Aguardando antes de tentar novamente...")
+                        logger.error("❌ Falha no login. Aguardando antes de tentar novamente...")
                         time.sleep(60)  # Aguardar 1 minuto antes de tentar novamente
                         continue
+                    else:
+                        logger.info("✅ Login realizado com sucesso")
                 
                 # Monitorar apostas ativas
+                active_count = sum(1 for b in self.active_bets.values() if b.status == BetStatus.ACTIVE)
+                if active_count > 0:
+                    logger.info(f"📊 Monitorando {active_count} aposta(s) ativa(s)...")
                 self.monitor_active_bets()
                 
                 # Processar estratégias
                 if self.soccer_config['enabled']:
                     self.process_soccer_strategy()
+                else:
+                    logger.debug("Estratégia de futebol desabilitada no config")
                 
                 # Hóquei desabilitado
                 # if self.hockey_config['enabled']:

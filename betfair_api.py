@@ -5,6 +5,7 @@ Cliente básico para interagir com a API Betfair Exchange
 
 import requests
 import json
+import logging
 from configparser import ConfigParser
 from betfair_login import BetfairLogin
 
@@ -424,6 +425,133 @@ class BetfairAPI:
             params['orderProjection'] = order_projection
         
         return self._make_request('SportsAPING/v1.0/listCurrentOrders', params)
+    
+    def get_settled_bets(self, bet_ids=None, from_date=None, to_date=None, page_index=0):
+        """
+        Busca apostas finalizadas (settled) da API de atividade da Betfair
+        
+        Args:
+            bet_ids: Lista de IDs de apostas (opcional)
+            from_date: Data inicial (opcional)
+            to_date: Data final (opcional)
+            page_index: Índice da página (padrão 0)
+            
+        Returns:
+            dict: Dados das apostas finalizadas
+        """
+        try:
+            # URL da API de atividade da Betfair Brasil
+            base_url = 'https://myactivity.betfair.bet.br/activity/exchange/settled'
+            
+            # Preparar headers com autenticação
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            }
+            
+            # Se tiver session token, tentar usar (pode não funcionar para API web)
+            if self.session_token:
+                headers['Authorization'] = f'Bearer {self.session_token}'
+            
+            # Parâmetros da requisição
+            params = {
+                'pageIndex': page_index,
+                'pageSize': 10
+            }
+            
+            if bet_ids:
+                params['betIds'] = ','.join(bet_ids)
+            
+            # Fazer requisição
+            response = requests.get(
+                base_url,
+                params=params,
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                # Se falhar com autenticação, tentar sem (pode precisar de cookies de sessão)
+                logging.getLogger(__name__).warning(
+                    f"Erro ao buscar apostas finalizadas: {response.status_code}. "
+                    "Pode ser necessário autenticação via cookies."
+                )
+                return None
+                
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Erro ao buscar apostas finalizadas: {e}")
+            return None
+    
+    def get_market_result(self, market_id):
+        """
+        Busca resultado/placar de um mercado/jogo
+        
+        Args:
+            market_id: ID do mercado
+            
+        Returns:
+            dict: Dados do resultado do jogo (placar, status, etc.)
+        """
+        try:
+            # Usar listMarketBook para obter status do mercado e runners
+            market_book = self.list_market_book(
+                market_ids=[market_id],
+                match_projection='ROLLED_UP_BY_PRICE'
+            )
+            
+            if not market_book:
+                return None
+            
+            market = market_book[0]
+            market_status = market.get('status')
+            
+            # Buscar informações do mercado
+            market_catalogue = self.list_market_catalogue(
+                filter_dict={'marketIds': [market_id]},
+                market_projection=['MARKET_DESCRIPTION', 'RUNNER_DESCRIPTION', 'EVENT']
+            )
+            
+            result = {
+                'market_id': market_id,
+                'market_status': market_status,
+                'runners': []
+            }
+            
+            if market_catalogue:
+                market_info = market_catalogue[0] if market_catalogue else {}
+                event = market_info.get('event', {})
+                result['event_name'] = event.get('name', '')
+                result['event_id'] = event.get('id', '')
+            
+            # Processar runners para obter status e possivelmente placar
+            runners = market.get('runners', [])
+            for runner in runners:
+                runner_info = {
+                    'selection_id': runner.get('id'),
+                    'status': runner.get('status'),
+                    'last_price_traded': runner.get('ltp'),
+                }
+                
+                # Se o mercado está CLOSED, o runner pode ter resultado
+                if market_status == 'CLOSED':
+                    runner_info['settled'] = True
+                    # Tentar determinar se ganhou ou perdeu baseado no status
+                    if runner.get('status') == 'WINNER':
+                        runner_info['result'] = 'WIN'
+                    elif runner.get('status') == 'LOSER':
+                        runner_info['result'] = 'LOSE'
+                    else:
+                        runner_info['result'] = 'PLACE'
+                
+                result['runners'].append(runner_info)
+            
+            return result
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Erro ao buscar resultado do mercado: {e}")
+            return None
 
 
 def main():

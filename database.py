@@ -28,15 +28,22 @@ class BetDatabase:
         self._create_tables()
         logger.info(f"Banco de dados inicializado: {db_path}")
     
-    def _get_connection(self):
-        """Obtém uma conexão com o banco de dados"""
-        conn = sqlite3.connect(self.db_path)
+    def _get_connection(self, timeout: float = 10.0):
+        """Obtém uma conexão com o banco de dados com timeout e WAL mode"""
+        conn = sqlite3.connect(self.db_path, timeout=timeout)
         conn.row_factory = sqlite3.Row  # Para acessar colunas por nome
+        
+        # Habilitar WAL mode para permitir leituras concorrentes
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+        except Exception as e:
+            logger.debug(f"Não foi possível habilitar WAL mode: {e}")
+        
         return conn
     
     def _create_tables(self):
         """Cria as tabelas do banco de dados"""
-        conn = self._get_connection()
+        conn = self._get_connection(timeout=30.0)  # Timeout maior para criação de tabelas
         cursor = conn.cursor()
         
         # Tabela de apostas
@@ -115,89 +122,161 @@ class BetDatabase:
             ON daily_stats(date)
         """)
         
+        # Adicionar novos campos se não existirem (migração)
+        self._add_new_columns_if_needed(cursor)
+        
         conn.commit()
         conn.close()
         logger.info("Tabelas do banco de dados criadas/verificadas")
     
-    def insert_bet(self, bet_data: Dict) -> bool:
-        """Insere uma nova aposta no banco de dados"""
+    def _add_new_columns_if_needed(self, cursor):
+        """Adiciona novos campos à tabela bets se não existirem"""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            # Verificar quais colunas já existem
+            cursor.execute("PRAGMA table_info(bets)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
             
-            cursor.execute("""
-                INSERT INTO bets (
-                    bet_id, market_id, event_id, event_name, sport, strategy,
-                    side, selection_id, entry_price, entry_time, stake, liability,
-                    take_profit_pct, stop_loss_pct, status, current_price,
-                    profit_loss, close_reason, close_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                bet_data['bet_id'],
-                bet_data['market_id'],
-                bet_data.get('event_id'),
-                bet_data.get('event_name'),
-                bet_data['sport'],
-                bet_data['strategy'],
-                bet_data['side'],
-                bet_data['selection_id'],
-                bet_data['entry_price'],
-                bet_data['entry_time'],
-                bet_data['stake'],
-                bet_data.get('liability', 0),
-                bet_data['take_profit_pct'],
-                bet_data['stop_loss_pct'],
-                bet_data['status'],
-                bet_data.get('current_price'),
-                bet_data.get('profit_loss'),
-                bet_data.get('close_reason'),
-                bet_data.get('close_time')
-            ))
+            # Campos a adicionar
+            new_columns = {
+                'game_score': 'TEXT',
+                'market_status': 'TEXT',
+                'runner_status': 'TEXT',
+                'gross_profit': 'REAL',
+                'net_profit': 'REAL',
+                'settled_date': 'TIMESTAMP'
+            }
             
-            conn.commit()
-            conn.close()
-            logger.info(f"Aposta inserida no banco: {bet_data['bet_id']}")
-            return True
-        except sqlite3.IntegrityError as e:
-            logger.warning(f"Aposta {bet_data['bet_id']} já existe no banco")
-            return False
+            for column_name, column_type in new_columns.items():
+                if column_name not in existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE bets ADD COLUMN {column_name} {column_type}")
+                        logger.info(f"Coluna {column_name} adicionada à tabela bets")
+                    except sqlite3.OperationalError as e:
+                        logger.warning(f"Erro ao adicionar coluna {column_name}: {e}")
         except Exception as e:
-            logger.error(f"Erro ao inserir aposta no banco: {e}")
-            return False
+            logger.error(f"Erro ao verificar/adicionar colunas: {e}")
+    
+    def insert_bet(self, bet_data: Dict) -> bool:
+        """Insere uma nova aposta no banco de dados com retry em caso de lock"""
+        import time
+        max_retries = 5
+        retry_delay = 0.1  # 100ms
+        
+        for attempt in range(max_retries):
+            try:
+                conn = self._get_connection(timeout=5.0)
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO bets (
+                        bet_id, market_id, event_id, event_name, sport, strategy,
+                        side, selection_id, entry_price, entry_time, stake, liability,
+                        take_profit_pct, stop_loss_pct, status, current_price,
+                        profit_loss, close_reason, close_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    bet_data['bet_id'],
+                    bet_data['market_id'],
+                    bet_data.get('event_id'),
+                    bet_data.get('event_name'),
+                    bet_data['sport'],
+                    bet_data['strategy'],
+                    bet_data['side'],
+                    bet_data['selection_id'],
+                    bet_data['entry_price'],
+                    bet_data['entry_time'],
+                    bet_data['stake'],
+                    bet_data.get('liability', 0),
+                    bet_data['take_profit_pct'],
+                    bet_data['stop_loss_pct'],
+                    bet_data['status'],
+                    bet_data.get('current_price'),
+                    bet_data.get('profit_loss'),
+                    bet_data.get('close_reason'),
+                    bet_data.get('close_time')
+                ))
+                
+                conn.commit()
+                conn.close()
+                logger.info(f"Aposta inserida no banco: {bet_data['bet_id']}")
+                return True
+            except sqlite3.IntegrityError as e:
+                conn.close()
+                logger.warning(f"Aposta {bet_data['bet_id']} já existe no banco")
+                return False
+            except sqlite3.OperationalError as e:
+                conn.close()
+                error_msg = str(e).lower()
+                if 'locked' in error_msg and attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.debug(f"Banco travado, tentando novamente em {wait_time:.2f}s (tentativa {attempt + 1}/{max_retries})...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Erro ao inserir aposta no banco: {e}")
+                    return False
+            except Exception as e:
+                if 'conn' in locals():
+                    conn.close()
+                logger.error(f"Erro ao inserir aposta no banco: {e}")
+                return False
+        
+        return False
     
     def update_bet(self, bet_id: str, update_data: Dict) -> bool:
-        """Atualiza uma aposta existente"""
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            # Construir query dinamicamente baseado nos campos a atualizar
-            fields = []
-            values = []
-            for key, value in update_data.items():
-                fields.append(f"{key} = ?")
-                values.append(value)
-            
-            # Adicionar timestamp de atualização
-            fields.append("updated_at = CURRENT_TIMESTAMP")
-            values.append(bet_id)
-            
-            query = f"UPDATE bets SET {', '.join(fields)} WHERE bet_id = ?"
-            cursor.execute(query, values)
-            
-            conn.commit()
-            rows_affected = cursor.rowcount
-            conn.close()
-            
-            if rows_affected > 0:
-                logger.debug(f"Aposta atualizada no banco: {bet_id}")
-                return True
-            else:
-                logger.warning(f"Aposta {bet_id} não encontrada para atualizar")
+        """Atualiza uma aposta existente com retry em caso de lock"""
+        import time
+        max_retries = 5
+        retry_delay = 0.1  # 100ms
+        
+        for attempt in range(max_retries):
+            try:
+                conn = self._get_connection(timeout=5.0)
+                cursor = conn.cursor()
+                
+                # Construir query dinamicamente baseado nos campos a atualizar
+                fields = []
+                values = []
+                for key, value in update_data.items():
+                    fields.append(f"{key} = ?")
+                    values.append(value)
+                
+                # Adicionar timestamp de atualização
+                fields.append("updated_at = CURRENT_TIMESTAMP")
+                values.append(bet_id)
+                
+                query = f"UPDATE bets SET {', '.join(fields)} WHERE bet_id = ?"
+                cursor.execute(query, values)
+                
+                conn.commit()
+                rows_affected = cursor.rowcount
+                conn.close()
+                
+                if rows_affected > 0:
+                    logger.debug(f"Aposta atualizada no banco: {bet_id}")
+                    return True
+                else:
+                    logger.warning(f"Aposta {bet_id} não encontrada para atualizar")
+                    return False
+            except sqlite3.OperationalError as e:
+                if 'conn' in locals():
+                    conn.close()
+                error_msg = str(e).lower()
+                if 'locked' in error_msg and attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.debug(f"Banco travado ao atualizar, tentando novamente em {wait_time:.2f}s (tentativa {attempt + 1}/{max_retries})...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Erro ao atualizar aposta no banco: {e}")
+                    return False
+            except Exception as e:
+                if 'conn' in locals():
+                    conn.close()
+                logger.error(f"Erro ao atualizar aposta no banco: {e}")
                 return False
-        except Exception as e:
-            logger.error(f"Erro ao atualizar aposta no banco: {e}")
-            return False
+        
+        return False
     
     def get_bet(self, bet_id: str) -> Optional[Dict]:
         """Obtém uma aposta específica"""
@@ -217,31 +296,54 @@ class BetDatabase:
             return None
     
     def get_active_bets(self) -> List[Dict]:
-        """Obtém todas as apostas ativas (apenas dos últimos 2 dias)"""
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            # Buscar apenas apostas ativas dos últimos 2 dias
-            from datetime import datetime, timedelta
-            cutoff_date = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-            
-            cursor.execute("""
-                SELECT * FROM bets 
-                WHERE status = 'ACTIVE' 
-                AND DATE(entry_time) >= ?
-                ORDER BY entry_time DESC
-            """, (cutoff_date,))
-            
-            rows = cursor.fetchall()
-            conn.close()
-            
-            bets = [dict(row) for row in rows]
-            logger.debug(f"Encontradas {len(bets)} apostas ativas dos últimos 2 dias")
-            return bets
-        except Exception as e:
-            logger.error(f"Erro ao buscar apostas ativas: {e}")
-            return []
+        """Obtém todas as apostas ativas das últimas 24 horas com retry em caso de lock"""
+        import time
+        max_retries = 3
+        retry_delay = 0.1
+        
+        for attempt in range(max_retries):
+            try:
+                conn = self._get_connection(timeout=5.0)
+                cursor = conn.cursor()
+                
+                # Buscar apenas apostas ativas das últimas 24 horas
+                from datetime import datetime, timedelta
+                agora = datetime.now()
+                vinte_quatro_horas_atras = agora - timedelta(hours=24)
+                vinte_quatro_horas_atras_str = vinte_quatro_horas_atras.strftime('%Y-%m-%d %H:%M:%S')
+                
+                cursor.execute("""
+                    SELECT * FROM bets 
+                    WHERE status = 'ACTIVE' 
+                    AND entry_time >= ?
+                    ORDER BY entry_time DESC
+                """, (vinte_quatro_horas_atras_str,))
+                
+                rows = cursor.fetchall()
+                conn.close()
+                
+                bets = [dict(row) for row in rows]
+                logger.debug(f"Encontradas {len(bets)} apostas ativas das últimas 24 horas")
+                return bets
+            except sqlite3.OperationalError as e:
+                if 'conn' in locals():
+                    conn.close()
+                error_msg = str(e).lower()
+                if 'locked' in error_msg and attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.debug(f"Banco travado ao buscar apostas ativas, tentando novamente em {wait_time:.2f}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Erro ao buscar apostas ativas: {e}")
+                    return []
+            except Exception as e:
+                if 'conn' in locals():
+                    conn.close()
+                logger.error(f"Erro ao buscar apostas ativas: {e}")
+                return []
+        
+        return []
     
     def get_bets_by_status(self, status: str) -> List[Dict]:
         """Obtém apostas por status"""
@@ -506,3 +608,58 @@ class BetDatabase:
             self.update_daily_stats()
         
         return success
+    
+    def update_bet_settled_data(self, bet_id: str, settled_data: Dict) -> bool:
+        """Atualiza uma aposta com dados da API de atividade (settled bets)"""
+        try:
+            update_fields = {}
+            
+            if 'grossProfit' in settled_data:
+                update_fields['gross_profit'] = float(settled_data['grossProfit']) if settled_data['grossProfit'] else None
+            if 'netProfit' in settled_data:
+                update_fields['net_profit'] = float(settled_data['netProfit']) if settled_data['netProfit'] else None
+            
+            # Se tem lucro/prejuízo, atualizar status e profit_loss
+            if 'grossProfit' in settled_data and settled_data['grossProfit']:
+                gross_profit = float(settled_data['grossProfit'])
+                if gross_profit > 0:
+                    update_fields['status'] = 'CLOSED_PROFIT'
+                elif gross_profit < 0:
+                    update_fields['status'] = 'CLOSED_LOSS'
+                
+                # Calcular profit_loss percentual se tiver stake
+                bet = self.get_bet(bet_id)
+                if bet and bet.get('stake'):
+                    profit_loss_pct = (gross_profit / bet['stake']) * 100
+                    update_fields['profit_loss'] = profit_loss_pct
+            
+            if 'settledDate' in settled_data:
+                update_fields['settled_date'] = settled_data['settledDate']
+            
+            if update_fields:
+                return self.update_bet(bet_id, update_fields)
+            
+            return False
+        except Exception as e:
+            logger.error(f"Erro ao atualizar dados de aposta finalizada: {e}")
+            return False
+    
+    def update_bet_game_info(self, bet_id: str, game_score: str = None, 
+                             market_status: str = None, runner_status: str = None) -> bool:
+        """Atualiza informações do jogo (placar, status) de uma aposta"""
+        try:
+            update_fields = {}
+            if game_score:
+                update_fields['game_score'] = game_score
+            if market_status:
+                update_fields['market_status'] = market_status
+            if runner_status:
+                update_fields['runner_status'] = runner_status
+            
+            if update_fields:
+                return self.update_bet(bet_id, update_fields)
+            
+            return False
+        except Exception as e:
+            logger.error(f"Erro ao atualizar informações do jogo: {e}")
+            return False

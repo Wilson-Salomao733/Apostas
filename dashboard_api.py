@@ -209,7 +209,7 @@ def get_data():
             pass
         
         # Buscar apostas do banco de dados
-        # Buscar apostas ativas (apenas dos últimos 2 dias - já filtrado no método)
+        # Buscar apostas ativas (últimas 24 horas - já filtrado no método)
         active_bets_db = db.get_active_bets()
         
         # Buscar apostas fechadas dos últimos 2 dias apenas
@@ -251,23 +251,39 @@ def get_data():
                 'close_time': bet_db.get('close_time'),
                 'take_profit_pct': bet_db.get('take_profit_pct'),
                 'stop_loss_pct': bet_db.get('stop_loss_pct'),
+                'game_score': bet_db.get('game_score'),
+                'market_status': bet_db.get('market_status'),
+                'runner_status': bet_db.get('runner_status'),
+                'gross_profit': bet_db.get('gross_profit'),
+                'net_profit': bet_db.get('net_profit'),
             }
             
             bets.append(bet_data)
             
             # Classificar entre ativa e histórico
-            # ATIVAS: status = ACTIVE E tem nome válido do evento
+            # ATIVAS: status = ACTIVE E das últimas 24 horas (já filtrado no get_active_bets)
             # HISTÓRICO: todas as outras (CLOSED_PROFIT, CLOSED_LOSS, CLOSED_TIMEOUT, etc)
             if bet_db['status'] == 'ACTIVE':
-                # Filtrar apostas ativas sem nome válido
-                event_name = bet_db.get('event_name', '') or ''
-                has_valid_name = event_name and \
-                                event_name.strip() != '' and \
-                                event_name != 'N/A' and \
-                                event_name != 'Nome não disponível' and \
-                                'carregando' not in event_name.lower()
+                # Verificar se é das últimas 24 horas (segurança extra)
+                agora = datetime.now()
+                vinte_quatro_horas_atras = agora - timedelta(hours=24)
                 
-                if has_valid_name:
+                # Parse da data de entrada
+                try:
+                    entry_time_str = bet_db['entry_time']
+                    if 'T' in entry_time_str:
+                        entry_datetime = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
+                        # Remover timezone para comparação
+                        if entry_datetime.tzinfo:
+                            entry_datetime = entry_datetime.replace(tzinfo=None)
+                    else:
+                        entry_datetime = datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
+                except:
+                    # Se falhar o parse, usar data atual como fallback
+                    entry_datetime = agora
+                
+                # Só adicionar se for das últimas 24 horas
+                if entry_datetime >= vinte_quatro_horas_atras:
                     active_bets.append(bet_data)
                 # Se não tem nome válido, não adiciona em active_bets (fica apenas em bets para histórico)
             else:
@@ -397,6 +413,102 @@ def get_bet_details(bet_id):
                 'success': False,
                 'error': 'Aposta não encontrada'
             }), 404
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/bet/<bet_id>/check-settled', methods=['POST'])
+def check_bet_settled(bet_id):
+    """Endpoint para verificar e atualizar uma aposta com dados da API de atividade"""
+    try:
+        from check_settled_bets import check_and_update_settled_bets
+        from betfair_api import BetfairAPI
+        
+        api = BetfairAPI()
+        if not api.login():
+            return jsonify({
+                'success': False,
+                'error': 'Falha no login da API'
+            }), 500
+        
+        bet = db.get_bet(bet_id)
+        if not bet:
+            return jsonify({
+                'success': False,
+                'error': 'Aposta não encontrada'
+            }), 404
+        
+        # Buscar dados do mercado
+        market_result = api.get_market_result(bet['market_id'])
+        
+        update_data = {}
+        
+        if market_result:
+            # Atualizar status do mercado
+            market_status = market_result.get('market_status')
+            if market_status:
+                db.update_bet_game_info(bet_id, market_status=market_status)
+                update_data['market_status'] = market_status
+            
+            # Buscar informações do runner
+            runners = market_result.get('runners', [])
+            for runner in runners:
+                if str(runner.get('selection_id')) == str(bet['selection_id']):
+                    runner_status = runner.get('status', '')
+                    result = runner.get('result', '')
+                    
+                    if runner_status:
+                        db.update_bet_game_info(bet_id, runner_status=runner_status)
+                        update_data['runner_status'] = runner_status
+                    
+                    if result:
+                        update_data['result'] = result
+                    
+                    break
+        
+        # Tentar buscar dados da API de atividade
+        settled_data = api.get_settled_bets(bet_ids=[bet_id])
+        
+        if settled_data and 'bets' in settled_data:
+            for settled_bet in settled_data['bets']:
+                settled_bet_id = settled_bet.get('betId', '')
+                # A API pode retornar com ou sem prefixo "1:"
+                if settled_bet_id == bet_id or settled_bet_id == f"1:{bet_id}" or settled_bet_id.endswith(bet_id):
+                    db.update_bet_settled_data(bet_id, settled_bet)
+                    update_data['gross_profit'] = settled_bet.get('grossProfit')
+                    update_data['net_profit'] = settled_bet.get('netProfit')
+                    break
+        
+        # Buscar aposta atualizada
+        updated_bet = db.get_bet(bet_id)
+        
+        return jsonify({
+            'success': True,
+            'bet': updated_bet,
+            'updates': update_data
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/bets/check-all-settled', methods=['POST'])
+def check_all_settled_bets():
+    """Endpoint para verificar e atualizar todas as apostas recentes"""
+    try:
+        from check_settled_bets import check_and_update_settled_bets
+        
+        check_and_update_settled_bets()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Verificação concluída'
+        })
+        
     except Exception as e:
         return jsonify({
             'success': False,

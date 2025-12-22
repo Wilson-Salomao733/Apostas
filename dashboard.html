@@ -473,6 +473,19 @@
             }
         }
 
+        // Função para buscar informações do jogo (placar, status)
+        async function fetchGameInfo(betId) {
+            try {
+                const response = await fetch(`/api/game/${betId}/info`);
+                if (!response.ok) throw new Error('Erro ao buscar info do jogo');
+                const result = await response.json();
+                return result.game_info || null;
+            } catch (error) {
+                console.error('Erro ao buscar informações do jogo:', error);
+                return null;
+            }
+        }
+
         // Função para atualizar dados
         async function updateData() {
             const updateEl = document.getElementById('last-update');
@@ -602,7 +615,24 @@
                 if (!bet.event_name || bet.event_name === '' || bet.event_name === 'N/A') {
                     marketInfo = await fetchMarketInfo(bet.market_id);
                 }
-                const betCard = createBetCard(bet, marketInfo);
+                
+                // Buscar informações do jogo (placar, status)
+                let gameInfo = null;
+                if (bet.bet_id) {
+                    gameInfo = await fetchGameInfo(bet.bet_id);
+                    // Se não encontrou no banco, usar dados do banco se disponíveis
+                    if (!gameInfo) {
+                        gameInfo = {
+                            game_score: bet.game_score,
+                            game_status: bet.game_status,
+                            market_status: bet.market_status,
+                            runner_status: bet.runner_status,
+                            is_finished: bet.market_status === 'CLOSED' || bet.market_status === 'SUSPENDED'
+                        };
+                    }
+                }
+                
+                const betCard = createBetCard(bet, marketInfo, gameInfo);
                 container.appendChild(betCard);
             }
         }
@@ -629,7 +659,51 @@
                 if (!bet.event_name || bet.event_name === '' || bet.event_name === 'N/A') {
                     marketInfo = await fetchMarketInfo(bet.market_id);
                 }
-                const betCard = createBetCard(bet, marketInfo);
+                
+                // Buscar informações do jogo (placar, status) - usar dados do banco
+                let gameInfo = {
+                    game_score: bet.game_score,
+                    game_status: bet.game_status,
+                    market_status: bet.market_status,
+                    runner_status: bet.runner_status,
+                    is_finished: bet.market_status === 'CLOSED' || bet.market_status === 'SUSPENDED'
+                };
+                
+                // Se não tem no banco, tentar buscar da API
+                if (!gameInfo.game_status && bet.bet_id) {
+                    const apiGameInfo = await fetchGameInfo(bet.bet_id);
+                    if (apiGameInfo) {
+                        gameInfo = apiGameInfo;
+                    }
+                }
+                
+                // Se a aposta está fechada mas não tem dados atualizados, tentar verificar
+                const isClosed = bet.status && bet.status !== 'ACTIVE' && bet.status !== 'active';
+                if (isClosed && (!bet.gross_profit || !bet.market_status) && bet.bet_id) {
+                    // Verificar se precisa atualizar dados da API de atividade
+                    try {
+                        const checkResponse = await fetch(`/api/bet/${bet.bet_id}/check-settled`, { method: 'POST' });
+                        if (checkResponse.ok) {
+                            const checkData = await checkResponse.json();
+                            if (checkData.success && checkData.bet) {
+                                // Atualizar dados locais
+                                bet.gross_profit = checkData.bet.gross_profit || bet.gross_profit;
+                                bet.net_profit = checkData.bet.net_profit || bet.net_profit;
+                                bet.market_status = checkData.bet.market_status || bet.market_status;
+                                bet.runner_status = checkData.bet.runner_status || bet.runner_status;
+                                bet.game_score = checkData.bet.game_score || bet.game_score;
+                                
+                                gameInfo.market_status = bet.market_status;
+                                gameInfo.runner_status = bet.runner_status;
+                                gameInfo.game_score = bet.game_score;
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Erro ao verificar dados da API:', e);
+                    }
+                }
+                
+                const betCard = createBetCard(bet, marketInfo, gameInfo);
                 // Marcar visualmente como histórico
                 betCard.style.opacity = '0.8';
                 betCard.style.borderLeftColor = '#7f8c8d';
@@ -638,7 +712,7 @@
         }
 
         // Criar card de aposta
-        function createBetCard(bet, marketInfo) {
+        function createBetCard(bet, marketInfo, gameInfo = null) {
             const card = document.createElement('div');
             card.className = 'bet-card';
             
@@ -669,7 +743,7 @@
                 }
             } else {
                 // Fallback: detectar pelo selection_id (código antigo)
-                const selectionId = bet.selection_id || bet.selectionId;
+            const selectionId = bet.selection_id || bet.selectionId;
                 isSoccer = selectionId == 47972 || selectionId == '47972';
                 sport = isSoccer ? '⚽ Futebol' : '🎾 Tênis';
                 marketType = isSoccer ? 'Under 4.5 Goals' : 'Match Odds';
@@ -739,7 +813,29 @@
             let profitValue = 0;
             
             if (isClosed) {
-                if (bet.profit_loss !== null && bet.profit_loss !== undefined) {
+                // Priorizar gross_profit da API de atividade se disponível
+                if (bet.gross_profit !== null && bet.gross_profit !== undefined) {
+                    const grossProfit = parseFloat(bet.gross_profit);
+                    profitValue = grossProfit;
+                    
+                    if (grossProfit > 0) {
+                        resultBadge = `✅ Ganhou: +R$ ${grossProfit.toFixed(2)}`;
+                        resultColor = '#27ae60';
+                        if (bet.net_profit !== null && bet.net_profit !== undefined) {
+                            resultBadge += ` (Líquido: R$ ${parseFloat(bet.net_profit).toFixed(2)})`;
+                        }
+                    } else if (grossProfit < 0) {
+                        resultBadge = `❌ Perdeu: -R$ ${Math.abs(grossProfit).toFixed(2)}`;
+                        resultColor = '#e74c3c';
+                        if (bet.net_profit !== null && bet.net_profit !== undefined) {
+                            resultBadge += ` (Líquido: R$ ${parseFloat(bet.net_profit).toFixed(2)})`;
+                        }
+                    } else {
+                        resultBadge = `⚪ Empate: R$ 0.00`;
+                        resultColor = '#95a5a6';
+                    }
+                } else if (bet.profit_loss !== null && bet.profit_loss !== undefined) {
+                    // Fallback para profit_loss calculado
                     const profitLoss = parseFloat(bet.profit_loss);
                     const stake = parseFloat(bet.size || bet.stake || 0);
                     profitValue = stake * (profitLoss / 100);
@@ -777,6 +873,9 @@
                         <div class="market-type">📊 Mercado: ${marketType} (${bet.side || 'BACK'})</div>
                         <div class="win-condition">✅ ${winCondition}</div>
                         ${isClosed && resultBadge ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: ${resultColor}20; border-radius: 5px; color: ${resultColor}; font-weight: 600; font-size: 0.9rem;">${resultBadge}</div>` : ''}
+                        ${bet.game_score ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: #3498db20; border-radius: 5px; color: #2980b9; font-weight: 600; font-size: 1rem;">⚽ Placar: ${bet.game_score}</div>` : (gameInfo && gameInfo.game_score ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: #3498db20; border-radius: 5px; color: #2980b9; font-weight: 600; font-size: 1rem;">⚽ Placar: ${gameInfo.game_score}</div>` : '')}
+                        ${bet.runner_status ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: ${bet.runner_status === 'WINNER' ? '#27ae6020' : bet.runner_status === 'LOSER' ? '#e74c3c20' : '#95a5a620'}; border-radius: 5px; color: ${bet.runner_status === 'WINNER' ? '#27ae60' : bet.runner_status === 'LOSER' ? '#e74c3c' : '#7f8c8d'}; font-weight: 600; font-size: 0.9rem;">📊 Resultado: ${bet.runner_status === 'WINNER' ? '✅ Ganhou' : bet.runner_status === 'LOSER' ? '❌ Perdeu' : bet.runner_status}</div>` : ''}
+                        ${bet.market_status ? `<div style="margin-top: 0.3rem; font-size: 0.8rem; color: #7f8c8d;">Mercado: ${bet.market_status === 'OPEN' ? '🟢 Aberto' : bet.market_status === 'CLOSED' ? '🔴 Fechado' : bet.market_status === 'SUSPENDED' ? '⏸️ Suspenso' : bet.market_status}</div>` : (gameInfo && gameInfo.market_status && gameInfo.market_status !== 'UNKNOWN' ? `<div style="margin-top: 0.3rem; font-size: 0.8rem; color: #7f8c8d;">Mercado: ${gameInfo.market_status === 'OPEN' ? '🟢 Aberto' : gameInfo.market_status === 'CLOSED' ? '🔴 Fechado' : gameInfo.market_status === 'SUSPENDED' ? '⏸️ Suspenso' : gameInfo.market_status}</div>` : '')}
                         <div class="game-time">⏰ Horário: ${timeRange}</div>
                         <div style="margin-top: 0.5rem; font-size: 0.75rem; color: #95a5a6;">
                             Market ID: ${bet.market_id} | Bet ID: ${bet.bet_id?.substring(0, 12)}...

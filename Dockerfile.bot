@@ -20,6 +20,7 @@ COPY betfair_login.py .
 COPY betfair_api.py .
 COPY betfair_bot.py .
 COPY database.py .
+COPY telegram_notifier.py .
 COPY migrate_to_database.py .
 COPY view_database.py .
 COPY docker-entrypoint-bot.sh .
