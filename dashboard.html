@@ -376,6 +376,54 @@
             </div>
         </div>
 
+        <!-- Configurações do Bot -->
+        <div class="bets-section">
+            <h2>⚙️ Configurações do Bot</h2>
+            <div id="config-container" style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 1.5rem;">
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--dark);">💰 Stake (R$)</label>
+                        <input type="number" id="config-stake" step="0.1" min="1" style="width: 100%; padding: 0.75rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem;" />
+                        <small style="color: #7f8c8d; font-size: 0.85rem;">Valor de cada aposta</small>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--dark);">📊 Max Apostas por Esporte</label>
+                        <input type="number" id="config-max-bets" step="1" min="1" max="100" style="width: 100%; padding: 0.75rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem;" />
+                        <small style="color: #7f8c8d; font-size: 0.85rem;">Limite de apostas simultâneas</small>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--dark);">⚽ Under Gols</label>
+                        <input type="number" id="config-under-goals" step="0.5" min="0.5" max="10" style="width: 100%; padding: 0.75rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem;" />
+                        <small style="color: #7f8c8d; font-size: 0.85rem;">Ex: 4.5 = Under 4.5 Goals</small>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--dark);">📈 Odd Mínima</label>
+                        <input type="number" id="config-min-odd" step="0.01" min="1.01" max="10" style="width: 100%; padding: 0.75rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem;" />
+                        <small style="color: #7f8c8d; font-size: 0.85rem;">Odd mínima para entrar</small>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--dark);">⏱️ Verificar Tempo de Jogo</label>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="config-check-time" style="width: 24px; height: 24px; cursor: pointer; margin-right: 0.5rem;" />
+                                <span id="time-check-status" style="font-weight: 600; color: var(--dark);">Ligado</span>
+                            </label>
+                        </div>
+                        <small style="color: #7f8c8d; font-size: 0.85rem;">Verificar se jogo está entre 5-15 minutos</small>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 1rem; align-items: center;">
+                    <button id="save-config-btn" class="btn" style="background: var(--success); color: white; padding: 0.75rem 2rem; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; transition: all 0.3s;">
+                        💾 Salvar Configurações
+                    </button>
+                    <span id="config-message" style="color: var(--success); font-weight: 600;"></span>
+                </div>
+                <div style="margin-top: 1rem; padding: 1rem; background: #fff3cd; border-radius: 8px; border-left: 4px solid var(--warning);">
+                    <strong>⚠️ Atenção:</strong> Após salvar, você precisa reiniciar o bot para aplicar as mudanças.
+                </div>
+            </div>
+        </div>
+
         <!-- Active Bets -->
         <div class="bets-section">
             <h2>🎯 Suas Apostas Ativas</h2>
@@ -449,6 +497,104 @@
     </div>
 
     <script>
+        // Carregar configurações ao iniciar
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                if (!response.ok) throw new Error('Erro ao carregar configurações');
+                const result = await response.json();
+                if (result.success && result.config) {
+                    document.getElementById('config-stake').value = result.config.stake || 15.0;
+                    document.getElementById('config-max-bets').value = result.config.max_bets_per_sport || 20;
+                    document.getElementById('config-under-goals').value = result.config.under_goals || 4.5;
+                    document.getElementById('config-min-odd').value = result.config.min_odd || 1.30;
+                    const checkTime = result.config.check_time_window !== undefined ? result.config.check_time_window : true;
+                    document.getElementById('config-check-time').checked = checkTime;
+                    updateTimeCheckStatus(checkTime);
+                }
+            } catch (error) {
+                console.error('Erro ao carregar configurações:', error);
+            }
+        }
+
+        // Salvar configurações
+        async function saveConfig() {
+            const messageEl = document.getElementById('config-message');
+            messageEl.textContent = 'Salvando...';
+            messageEl.style.color = '#7f8c8d';
+            
+            try {
+                const config = {
+                    stake: parseFloat(document.getElementById('config-stake').value),
+                    max_bets_per_sport: parseInt(document.getElementById('config-max-bets').value),
+                    under_goals: parseFloat(document.getElementById('config-under-goals').value),
+                    min_odd: parseFloat(document.getElementById('config-min-odd').value),
+                    check_time_window: document.getElementById('config-check-time').checked,
+                };
+                
+                // Validações
+                if (config.stake < 1) {
+                    throw new Error('Stake deve ser pelo menos R$ 1.00');
+                }
+                if (config.max_bets_per_sport < 1 || config.max_bets_per_sport > 100) {
+                    throw new Error('Max apostas deve estar entre 1 e 100');
+                }
+                if (config.under_goals < 0.5 || config.under_goals > 10) {
+                    throw new Error('Under gols deve estar entre 0.5 e 10');
+                }
+                if (config.min_odd < 1.01 || config.min_odd > 10) {
+                    throw new Error('Odd mínima deve estar entre 1.01 e 10');
+                }
+                
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config),
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    messageEl.textContent = '✅ ' + result.message;
+                    messageEl.style.color = 'var(--success)';
+                    setTimeout(() => {
+                        messageEl.textContent = '';
+                    }, 5000);
+                } else {
+                    throw new Error(result.message || 'Erro ao salvar');
+                }
+            } catch (error) {
+                messageEl.textContent = '❌ ' + error.message;
+                messageEl.style.color = 'var(--danger)';
+                setTimeout(() => {
+                    messageEl.textContent = '';
+                }, 5000);
+            }
+        }
+
+        // Atualizar status do toggle de tempo
+        function updateTimeCheckStatus(checked) {
+            const statusEl = document.getElementById('time-check-status');
+            if (checked) {
+                statusEl.textContent = 'Ligado';
+                statusEl.style.color = 'var(--success)';
+            } else {
+                statusEl.textContent = 'Desligado';
+                statusEl.style.color = '#7f8c8d';
+            }
+        }
+
+        // Event listeners
+        document.getElementById('save-config-btn').addEventListener('click', saveConfig);
+        document.getElementById('config-check-time').addEventListener('change', function(e) {
+            updateTimeCheckStatus(e.target.checked);
+        });
+        
+        // Carregar configurações ao iniciar
+        loadConfig();
+
         // Função para buscar dados da API
         async function fetchData() {
             try {
@@ -902,18 +1048,6 @@
                         </div>
                     </div>
                 </div>
-                ${!isClosed ? `
-                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #ecf0f1; text-align: center;">
-                    <button 
-                        class="btn btn-warning" 
-                        onclick="cancelBet('${bet.market_id}', '${bet.bet_id}', this)"
-                        style="padding: 0.5rem 1.5rem; font-size: 0.9rem; background: #f39c12; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: 600;"
-                        onmouseover="this.style.background='#e67e22'"
-                        onmouseout="this.style.background='#f39c12'">
-                        💰 Cancelar Aposta (Cash Out)
-                    </button>
-                </div>
-                ` : ''}
             `;
             
             return card;
@@ -963,6 +1097,51 @@
                 }
             } catch (error) {
                 console.error('Erro ao verificar Docker:', error);
+            }
+        }
+
+        // Função para fazer Cash Out de uma aposta
+        async function cancelBet(marketId, betId, buttonElement) {
+            if (!confirm('Tem certeza que deseja fazer Cash Out desta aposta?')) {
+                return;
+            }
+            
+            // Desabilitar botão e mostrar loading
+            const originalText = buttonElement.innerHTML;
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = '⏳ Processando...';
+            buttonElement.style.opacity = '0.6';
+            
+            try {
+                const response = await fetch(`/api/bet/${betId}/cashout`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`✅ ${result.message}`);
+                    // Atualizar dados após cashout
+                    setTimeout(() => {
+                        updateData();
+                    }, 1000);
+                } else {
+                    alert(`❌ Erro: ${result.message || 'Não foi possível fazer cashout'}`);
+                    // Reabilitar botão
+                    buttonElement.disabled = false;
+                    buttonElement.innerHTML = originalText;
+                    buttonElement.style.opacity = '1';
+                }
+            } catch (error) {
+                console.error('Erro ao fazer cashout:', error);
+                alert(`❌ Erro ao fazer cashout: ${error.message}`);
+                // Reabilitar botão
+                buttonElement.disabled = false;
+                buttonElement.innerHTML = originalText;
+                buttonElement.style.opacity = '1';
             }
         }
 

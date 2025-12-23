@@ -45,6 +45,7 @@ services:
       - ./certs:/app/certs:ro
       # Configurações
       - ./config.ini:/app/config.ini:ro
+      - ./bot_config.ini:/app/bot_config.ini  # Sem :ro para permitir escrita pelo dashboard
       # Logs (compartilhado)
       - ./logs:/app/logs
       # HTML

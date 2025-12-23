@@ -95,6 +95,9 @@ class BetfairTradingBot:
             'take_profit_pct': float(self.bot_config.get('soccer', 'take_profit_pct', fallback='1.5')),
             'stop_loss_pct': float(self.bot_config.get('soccer', 'stop_loss_pct', fallback='10.0')),
             'timeout_minutes': int(self.bot_config.get('soccer', 'timeout_minutes', fallback='10')),
+            'min_odd': float(self.bot_config.get('soccer', 'min_odd', fallback='1.30')),
+            'under_goals': float(self.bot_config.get('soccer', 'under_goals', fallback='4.5')),
+            'check_time_window': self.bot_config.getboolean('soccer', 'check_time_window', fallback=True),
         }
         
         self.hockey_config = {
@@ -216,9 +219,11 @@ class BetfairTradingBot:
                 event = market.get('event', {})
                 event_name = event.get('name', '')
                 
-                # Verificar se é Over/Under 4.5
+                # Verificar se é Over/Under com a quantidade de gols configurada
                 market_name = market.get('marketName', '')
-                if '4.5' not in market_name.upper():
+                under_goals_str = str(self.soccer_config['under_goals']).replace('.', r'\.')
+                # Verificar se o mercado contém a quantidade de gols configurada (ex: 4.5, 2.5, 3.5)
+                if str(self.soccer_config['under_goals']) not in market_name.upper():
                     continue
                 
                 market_id = market.get('marketId')
@@ -229,11 +234,12 @@ class BetfairTradingBot:
                     # Obter runners do catalogue
                     runners = market.get('runners', [])
                     
-                    # Encontrar runner Under 4.5 no catalogue
+                    # Encontrar runner Under X.5 no catalogue (usando valor configurado)
                     under_runner_catalogue = None
+                    under_goals_search = str(self.soccer_config['under_goals'])
                     for runner in runners:
                         runner_name = runner.get('runnerName', '').upper()
-                        if 'UNDER' in runner_name and '4.5' in runner_name:
+                        if 'UNDER' in runner_name and under_goals_search in runner_name:
                             under_runner_catalogue = runner
                             break
                     
@@ -488,12 +494,13 @@ class BetfairTradingBot:
                         continue
             
             if not under_runner:
-                # Procurar pelo nome (fallback) - tentar diferentes variações
+                # Procurar pelo nome (fallback) - tentar diferentes variações usando valor configurado
+                under_goals_search = str(self.soccer_config['under_goals'])
                 for runner in runners:
                     runner_name = runner.get('runnerName', '').upper()
-                    # Tentar diferentes formatos
-                    if ('UNDER' in runner_name and '4.5' in runner_name) or \
-                       ('UNDER' in runner_name and '4' in runner_name and '5' in runner_name):
+                    # Tentar diferentes formatos (ex: "UNDER 4.5" ou "UNDER 4" e "5")
+                    if ('UNDER' in runner_name and under_goals_search in runner_name) or \
+                       (under_goals_search.replace('.', '') in runner_name and 'UNDER' in runner_name):
                         under_runner = runner
                         logger.debug(f"Mercado {market_id}: Runner encontrado por nome: {runner_name}")
                         break
@@ -521,8 +528,8 @@ class BetfairTradingBot:
                 logger.debug(f"Mercado {market_id}: Preço inválido: {current_price}")
                 return None
             
-            # ✅ VERIFICAR ODD MÍNIMA: apenas apostar se odd > 1.30
-            min_odd = 1.30
+            # ✅ VERIFICAR ODD MÍNIMA: apenas apostar se odd > min_odd configurado
+            min_odd = self.soccer_config['min_odd']
             if current_price <= min_odd:
                 logger.info(f"💰 Mercado {market_id}: Odd muito baixa ({current_price:.2f} <= {min_odd:.2f}) - aguardando odd maior")
                 return None
@@ -532,11 +539,40 @@ class BetfairTradingBot:
                 logger.info(f"⚠️ Mercado {market_id}: Liquidez insuficiente: {available_size:.2f} < {self.stake:.2f}")
                 return None
             
-            # Verificar se já temos aposta ativa neste mercado
+            # ✅ Verificar se já temos aposta ativa neste mercado (na memória)
             for bet in self.active_bets.values():
                 if bet.market_id == market_id and bet.status == BetStatus.ACTIVE:
-                    logger.debug(f"Mercado {market_id}: Já tem aposta ativa")
+                    logger.info(f"⚠️ Mercado {market_id}: Já tem aposta ativa na memória (Bet ID: {bet.bet_id})")
                     return None
+            
+            # ✅ Verificar se já existe aposta ativa no banco de dados (mesmo que não esteja na memória)
+            try:
+                db_active_bets = self.db.get_active_bets()
+                for db_bet in db_active_bets:
+                    if db_bet.get('market_id') == market_id and db_bet.get('status') == 'ACTIVE':
+                        db_bet_id = db_bet.get('bet_id', 'N/A')
+                        logger.info(f"⚠️ Mercado {market_id}: Já tem aposta ativa no banco de dados (Bet ID: {db_bet_id})")
+                        return None
+            except Exception as e:
+                logger.debug(f"Erro ao verificar banco de dados para mercado {market_id}: {e}")
+            
+            # ✅ Verificar se já existe aposta ativa na Betfair API (mesmo após reinício do container)
+            try:
+                current_orders = self.api.list_current_orders()
+                if current_orders and 'currentOrders' in current_orders:
+                    for order in current_orders['currentOrders']:
+                        order_market_id = order.get('marketId')
+                        order_status = order.get('status')
+                        order_size_matched = order.get('sizeMatched', 0)
+                        
+                        # Verificar se é o mesmo mercado e se a aposta foi executada
+                        if order_market_id == market_id and order_status == 'EXECUTION_COMPLETE' and order_size_matched > 0:
+                            order_bet_id = order.get('betId', 'N/A')
+                            logger.info(f"⚠️ Mercado {market_id}: Já existe aposta ativa na Betfair (Bet ID: {order_bet_id}) - evitando duplicata")
+                            return None
+            except Exception as e:
+                logger.debug(f"Erro ao verificar apostas ativas na Betfair para mercado {market_id}: {e}")
+                # Continuar mesmo se houver erro na verificação da API
             
             # Verificar limite de apostas
             soccer_bets_count = sum(1 for b in self.active_bets.values() 
@@ -556,25 +592,30 @@ class BetfairTradingBot:
                 logger.warning(f"⚠️ Mercado {market_id}: Não foi possível verificar saldo")
                 return None
             
-            # ✅ VERIFICAR TEMPO DE JOGO (entry_min_minute e entry_max_minute)
-            match_time = self.get_match_time(market_id)
-            if match_time is None:
-                logger.debug(f"Mercado {market_id}: Não foi possível obter tempo de jogo - pulando verificação de tempo")
-                # Se não conseguir obter o tempo, podemos continuar (mas não é ideal)
-                # Em produção, você pode querer retornar None aqui para ser mais conservador
+            # ✅ VERIFICAR TEMPO DE JOGO (entry_min_minute e entry_max_minute) - apenas se habilitado
+            match_time = None  # Inicializar variável
+            if self.soccer_config['check_time_window']:
+                match_time = self.get_match_time(market_id)
+                if match_time is None:
+                    logger.debug(f"Mercado {market_id}: Não foi possível obter tempo de jogo - pulando verificação de tempo")
+                    # Se não conseguir obter o tempo e a verificação estiver habilitada, não apostar (mais conservador)
+                    logger.info(f"⏱️ Mercado {market_id}: Verificação de tempo habilitada mas não foi possível obter tempo - não apostando")
+                    return None
+                else:
+                    min_minute = self.soccer_config['entry_min_minute']
+                    max_minute = self.soccer_config['entry_max_minute']
+                    
+                    if match_time < min_minute:
+                        logger.info(f"⏱️ Mercado {market_id}: Jogo muito cedo ({match_time} min < {min_minute} min) - aguardando janela de entrada")
+                        return None
+                    
+                    if match_time > max_minute:
+                        logger.info(f"⏱️ Mercado {market_id}: Jogo muito avançado ({match_time} min > {max_minute} min) - janela de entrada passou")
+                        return None
+                    
+                    logger.info(f"⏱️ Mercado {market_id}: Tempo de jogo OK ({match_time} min) - dentro da janela [{min_minute}-{max_minute} min]")
             else:
-                min_minute = self.soccer_config['entry_min_minute']
-                max_minute = self.soccer_config['entry_max_minute']
-                
-                if match_time < min_minute:
-                    logger.info(f"⏱️ Mercado {market_id}: Jogo muito cedo ({match_time} min < {min_minute} min) - aguardando janela de entrada")
-                    return None
-                
-                if match_time > max_minute:
-                    logger.info(f"⏱️ Mercado {market_id}: Jogo muito avançado ({match_time} min > {max_minute} min) - janela de entrada passou")
-                    return None
-                
-                logger.info(f"⏱️ Mercado {market_id}: Tempo de jogo OK ({match_time} min) - dentro da janela [{min_minute}-{max_minute} min]")
+                logger.debug(f"Mercado {market_id}: Verificação de tempo de jogo desabilitada - pulando verificação")
             
             # ✅ VERIFICAR PLACAR (idealmente 0-0 ou baixo)
             # Nota: A Betfair não fornece placar diretamente na API básica
@@ -1117,12 +1158,14 @@ class BetfairTradingBot:
                 if bet_id:
                     # BACK: não tem liability, apenas stake
                     entry_time = datetime.now()
+                    under_goals = self.soccer_config['under_goals']
+                    strategy_name = f"Back Under {under_goals}"
                     bet = ActiveBet(
                         bet_id=bet_id,
                         market_id=market_id,
                         event_id=match['event_id'],
                         sport=SportType.SOCCER,
-                        strategy="Back Under 4.5",
+                        strategy=strategy_name,
                         side="BACK",
                         selection_id=entry_conditions['selection_id'],
                         entry_price=entry_conditions['price'],
@@ -1144,7 +1187,7 @@ class BetfairTradingBot:
                         'event_id': match['event_id'],
                         'event_name': match.get('event_name', ''),
                         'sport': SportType.SOCCER.name,
-                        'strategy': "Back Under 4.5",
+                        'strategy': strategy_name,
                         'side': "BACK",
                         'selection_id': entry_conditions['selection_id'],
                         'entry_price': entry_conditions['price'],
@@ -1156,8 +1199,9 @@ class BetfairTradingBot:
                         'status': 'ACTIVE',
                     })
                     
-                    logger.info(f"✓✓✓ NOVA APOSTA FUTEBOL (BACK Under 4.5): {match['event_name']} - Price {entry_conditions['price']:.2f} - Stake R$ {self.stake:.2f}")
-                    logger.info(f"   → Você GANHA se o jogo tiver MENOS de 4.5 gols (0, 1, 2, 3 ou 4 gols)")
+                    max_goals = int(under_goals)
+                    logger.info(f"✓✓✓ NOVA APOSTA FUTEBOL (BACK Under {under_goals}): {match['event_name']} - Price {entry_conditions['price']:.2f} - Stake R$ {self.stake:.2f}")
+                    logger.info(f"   → Você GANHA se o jogo tiver MENOS de {under_goals} gols (0 a {max_goals} gols)")
                     
                     # Enviar notificação do Telegram
                     if self.telegram and self.telegram.enabled:
@@ -1167,7 +1211,7 @@ class BetfairTradingBot:
                                 'bet_id': bet_id,
                                 'event_name': match.get('event_name', ''),
                                 'sport': SportType.SOCCER.name,
-                                'strategy': "Back Under 4.5",
+                                'strategy': strategy_name,
                                 'side': "BACK",
                                 'entry_price': entry_conditions['price'],
                                 'stake': self.stake,

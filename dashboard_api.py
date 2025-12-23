@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from betfair_api import BetfairAPI
 from database import BetDatabase
+from configparser import ConfigParser
 
 app = Flask(__name__)
 CORS(app)  # Permitir requisições do frontend
@@ -725,6 +726,260 @@ def control_bot(action):
         return jsonify({
             'success': False,
             'message': f'Erro geral: {str(e)}'
+        }), 500
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Lê as configurações do bot_config.ini"""
+    try:
+        config_paths = [
+            Path('bot_config.ini'),
+            Path('/app/bot_config.ini'),
+            Path('./bot_config.ini'),
+        ]
+        
+        config_file = None
+        for path in config_paths:
+            if path.exists():
+                config_file = path
+                break
+        
+        if not config_file:
+            return jsonify({
+                'success': False,
+                'message': 'Arquivo bot_config.ini não encontrado'
+            }), 404
+        
+        config = ConfigParser()
+        config.read(config_file)
+        
+        return jsonify({
+            'success': True,
+            'config': {
+                'stake': float(config.get('bot', 'stake', fallback='15.0')),
+                'max_bets_per_sport': int(config.get('bot', 'max_bets_per_sport', fallback='20')),
+                'check_interval': int(config.get('bot', 'check_interval', fallback='30')),
+                'min_odd': float(config.get('soccer', 'min_odd', fallback='1.30')),
+                'under_goals': float(config.get('soccer', 'under_goals', fallback='4.5')),
+                'check_time_window': config.getboolean('soccer', 'check_time_window', fallback=True),
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Erro ao ler configurações: {str(e)}'
+        }), 500
+
+@app.route('/api/config', methods=['POST'])
+def save_config():
+    """Salva as configurações no bot_config.ini"""
+    try:
+        data = request.get_json()
+        
+        config_paths = [
+            Path('bot_config.ini'),
+            Path('/app/bot_config.ini'),
+            Path('./bot_config.ini'),
+        ]
+        
+        config_file = None
+        for path in config_paths:
+            if path.exists():
+                config_file = path
+                break
+        
+        if not config_file:
+            return jsonify({
+                'success': False,
+                'message': 'Arquivo bot_config.ini não encontrado'
+            }), 404
+        
+        # Ler configuração atual
+        config = ConfigParser()
+        config.read(config_file)
+        
+        # Atualizar valores se fornecidos
+        if 'stake' in data:
+            config.set('bot', 'stake', str(data['stake']))
+        if 'max_bets_per_sport' in data:
+            config.set('bot', 'max_bets_per_sport', str(data['max_bets_per_sport']))
+        if 'check_interval' in data:
+            config.set('bot', 'check_interval', str(data['check_interval']))
+        if 'min_odd' in data:
+            config.set('soccer', 'min_odd', str(data['min_odd']))
+        if 'under_goals' in data:
+            config.set('soccer', 'under_goals', str(data['under_goals']))
+        if 'check_time_window' in data:
+            config.set('soccer', 'check_time_window', str(data['check_time_window']).lower())
+        
+        # Salvar arquivo
+        with open(config_file, 'w', encoding='utf-8') as f:
+            config.write(f)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Configurações salvas com sucesso! Reinicie o bot para aplicar as mudanças.'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Erro ao salvar configurações: {str(e)}'
+        }), 500
+
+@app.route('/api/bet/<bet_id>/cashout', methods=['POST'])
+def cashout_bet(bet_id):
+    """Faz cashout de uma aposta específica (fecha a posição fazendo hedge)"""
+    try:
+        # Buscar informações da aposta
+        orders = BetfairAPI().list_current_orders()
+        if not orders:
+            return jsonify({
+                'success': False,
+                'message': 'Não foi possível buscar apostas ativas'
+            }), 500
+        
+        current_orders = orders.get('currentOrders', [])
+        bet_order = None
+        
+        for order in current_orders:
+            if str(order.get('betId')) == str(bet_id):
+                bet_order = order
+                break
+        
+        if not bet_order:
+            return jsonify({
+                'success': False,
+                'message': 'Aposta não encontrada ou já foi fechada'
+            }), 404
+        
+        market_id = bet_order.get('marketId')
+        selection_id = bet_order.get('selectionId')
+        side = bet_order.get('side')  # 'BACK' ou 'LAY'
+        size_matched = bet_order.get('sizeMatched', 0)
+        price_size = bet_order.get('priceSize', {})
+        original_price = price_size.get('price', 0)
+        original_stake = size_matched
+        
+        if size_matched == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Aposta não foi executada ainda'
+            }), 400
+        
+        # Buscar odds atuais do mercado
+        api = BetfairAPI()
+        if not api.login():
+            return jsonify({
+                'success': False,
+                'message': 'Erro ao fazer login na Betfair'
+            }), 500
+        
+        market_book = api.list_market_book(
+            market_ids=[market_id],
+            price_projection={'priceData': ['EX_BEST_OFFERS']}
+        )
+        
+        if not market_book:
+            return jsonify({
+                'success': False,
+                'message': 'Não foi possível obter dados do mercado'
+            }), 500
+        
+        market = market_book[0]
+        runners = market.get('runners', [])
+        
+        # Encontrar o runner correto
+        target_runner = None
+        for runner in runners:
+            runner_id = runner.get('id') or runner.get('selectionId')
+            if str(runner_id) == str(selection_id):
+                target_runner = runner
+                break
+        
+        if not target_runner:
+            return jsonify({
+                'success': False,
+                'message': 'Runner não encontrado no mercado'
+            }), 404
+        
+        # Determinar lado oposto e calcular stake do hedge
+        if side == 'BACK':
+            # Para fechar BACK, fazemos LAY
+            hedge_side = 'LAY'
+            available_to_lay = target_runner.get('ex', {}).get('availableToLay', [])
+            if not available_to_lay:
+                return jsonify({
+                    'success': False,
+                    'message': 'Não há liquidez disponível para fazer LAY'
+                }), 400
+            hedge_price = available_to_lay[0].get('price', 0)
+            # Cálculo: hedge_stake = (back_stake * back_price) / lay_price
+            hedge_stake = (original_stake * original_price) / hedge_price
+        else:  # side == 'LAY'
+            # Para fechar LAY, fazemos BACK
+            hedge_side = 'BACK'
+            available_to_back = target_runner.get('ex', {}).get('availableToBack', [])
+            if not available_to_back:
+                return jsonify({
+                    'success': False,
+                    'message': 'Não há liquidez disponível para fazer BACK'
+                }), 400
+            hedge_price = available_to_back[0].get('price', 0)
+            # Cálculo: hedge_stake = lay_stake / back_price
+            hedge_stake = original_stake / hedge_price
+        
+        if hedge_price <= 1.0 or hedge_stake <= 0:
+            return jsonify({
+                'success': False,
+                'message': 'Preço ou stake inválido para hedge'
+            }), 400
+        
+        # Fazer a aposta de hedge
+        instruction = {
+            'instructionType': 'PLACE',
+            'selectionId': int(selection_id),
+            'handicap': 0.0,
+            'side': hedge_side,
+            'orderType': 'LIMIT',
+            'limitOrder': {
+                'size': round(hedge_stake, 2),
+                'price': round(hedge_price, 2),
+                'persistenceType': 'LAPSE'
+            }
+        }
+        
+        result = api.place_orders(
+            market_id=str(market_id),
+            instructions=[instruction],
+            customer_ref=f"cashout_{bet_id}_{int(datetime.now().timestamp())}"
+        )
+        
+        if result and 'instructionReports' in result:
+            report = result['instructionReports'][0]
+            if report.get('status') == 'SUCCESS':
+                hedge_bet_id = report.get('betId')
+                return jsonify({
+                    'success': True,
+                    'message': f'Cash Out realizado com sucesso! Bet ID: {hedge_bet_id}',
+                    'hedge_bet_id': hedge_bet_id
+                })
+            else:
+                error_code = report.get('errorCode', 'UNKNOWN')
+                error_message = report.get('errorMessage', 'Erro desconhecido')
+                return jsonify({
+                    'success': False,
+                    'message': f'Erro ao fazer cashout: {error_code} - {error_message}'
+                }), 400
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Resposta inesperada da API'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Erro ao fazer cashout: {str(e)}'
         }), 500
 
 @app.route('/')

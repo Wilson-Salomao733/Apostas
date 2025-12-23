@@ -205,7 +205,8 @@ class BetDatabase:
                 logger.warning(f"Aposta {bet_data['bet_id']} já existe no banco")
                 return False
             except sqlite3.OperationalError as e:
-                conn.close()
+                if 'conn' in locals():
+                    conn.close()
                 error_msg = str(e).lower()
                 if 'locked' in error_msg and attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
