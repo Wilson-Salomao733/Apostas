@@ -1,38 +1,32 @@
 #!/bin/bash
 # ============================================================
-# Restaura credenciais a partir dos GitHub Secrets
-# Uso: gh secret list (para verificar) e depois ./restaurar-credenciais.sh
+# Restaura credenciais a partir do arquivo criptografado
+# Uso: ./restaurar-credenciais.sh
 #
-# Pré-requisito: gh auth login
+# Pré-requisito: gpg instalado (sudo apt install gnupg -y)
 # ============================================================
 
 set -e
 
-REPO="Wilson-Salomao733/Apostas"
+BACKUP_FILE="credenciais.tar.gz.gpg"
 
 echo "=========================================="
-echo "🔐 RESTAURANDO CREDENCIAIS DO GITHUB"
+echo "🔐 RESTAURANDO CREDENCIAIS"
 echo "=========================================="
 
-mkdir -p certs
+if [ ! -f "$BACKUP_FILE" ]; then
+    echo "❌ Arquivo $BACKUP_FILE não encontrado!"
+    echo "   Certifique-se de estar na pasta do projeto."
+    exit 1
+fi
 
-echo "📄 Restaurando config.ini..."
-gh secret view CONFIG_INI --repo "$REPO" --json value -q .value > config.ini
-
-echo "📄 Restaurando bot_config.ini..."
-gh secret view BOT_CONFIG_INI --repo "$REPO" --json value -q .value > bot_config.ini
-
-echo "🔑 Restaurando certificados..."
-gh secret view CERT_CRT --repo "$REPO" --json value -q .value > certs/client-2048.crt
-gh secret view CERT_KEY --repo "$REPO" --json value -q .value > certs/client-2048.key
-gh secret view CERT_PEM --repo "$REPO" --json value -q .value > certs/client-2048.pem
-gh secret view CERT_CSR --repo "$REPO" --json value -q .value > certs/client-2048.csr
-gh secret view CERT_P12_B64 --repo "$REPO" --json value -q .value | base64 -d > certs/client-2048.p12
+echo "🔑 Digite a senha para descriptografar..."
+gpg --decrypt "$BACKUP_FILE" | tar -xz
 
 echo ""
 echo "✅ Credenciais restauradas com sucesso!"
 echo ""
 echo "Arquivos restaurados:"
-ls -lh config.ini bot_config.ini certs/client-2048.*
+ls -lh config.ini bot_config.ini certs/client-2048.* 2>/dev/null
 echo ""
 echo "Agora rode: ./atualizar-docker.sh"

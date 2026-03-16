@@ -31,6 +31,10 @@ certs/*.csr
 ExchangeBets_Settled*.csv
 *.csv
 
+# Backup não criptografado (o .gpg pode ser commitado)
+*.tar.gz
+!credenciais.tar.gz.gpg
+
 # Relatórios
 RElatório/
 
