@@ -1435,8 +1435,18 @@ class BetfairTradingBot:
                         return None
                     
                     if current_size < stake_rounded:
-                        logger.warning(f"place_back_bet: Liquidez insuficiente: {current_size} < {stake_rounded}")
-                        return None
+                        min_stake = 2.0
+                        if current_size >= min_stake:
+                            logger.warning(
+                                f"place_back_bet: Liquidez parcial {current_size:.2f} < {stake_rounded:.2f} "
+                                f"— apostando o disponível: R${current_size:.2f}"
+                            )
+                            stake_rounded = round(current_size, 2)
+                        else:
+                            logger.warning(
+                                f"place_back_bet: Liquidez insuficiente: {current_size:.2f} < stake mínimo {min_stake:.2f}"
+                            )
+                            return None
                     
                     # Se o preço mudou muito, usar o preço atual
                     if abs(current_price_valid - price_rounded) > 0.05:  # Tolerância de 5 centavos
@@ -2557,6 +2567,7 @@ class BetfairTradingBot:
                             if protection:
                                 label = '0-0 Correct Score'
                                 strategy_name = 'Proteção 0-0'
+                                protection_mode = 'fixed'
                             else:
                                 logger.warning(
                                     f"   ❌ Nenhuma proteção disponível para {event_name}: "
