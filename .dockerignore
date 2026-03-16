@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Certificados e configurações sensíveis
+certs/*.key
+certs/*.pem
+certs/*.p12
+config.ini
+*.crt
+*.key
+*.pem
+*.p12
+
+# Logs
+logs/
+*.log
+session_token.txt
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentação
+README.md
+*.md
+
+# Outros
+.DS_Store
+.vscode/
+.idea/
+

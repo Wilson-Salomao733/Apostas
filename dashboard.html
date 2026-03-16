@@ -1,0 +1,1371 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Betfair Trading Bot</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0f0f12;
+            --card: #18181c;
+            --card-hover: #1e1e24;
+            --border: #2a2a32;
+            --text: #f4f4f5;
+            --text-muted: #71717a;
+            --accent: #22c55e;
+            --accent-dim: rgba(34, 197, 94, 0.15);
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
+        }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        .app {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .header {
+            text-align: center;
+            padding: 32px 0 40px;
+            border-bottom: 1px solid var(--border);
+        }
+        .header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 4px;
+        }
+        .header p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+            padding: 16px 20px;
+            background: var(--card);
+            border-radius: 12px;
+            margin: 24px 0;
+            border: 1px solid var(--border);
+        }
+        .toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+        }
+        .status-dot.online { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+        .status-text { font-size: 0.875rem; color: var(--text-muted); }
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:active { opacity: 0.8; }
+        .btn-green { background: var(--accent); color: #fff; }
+        .btn-red { background: var(--danger); color: #fff; }
+        .btn-amber { background: var(--warning); color: #000; }
+        .btn-blue { background: var(--info); color: #fff; }
+        .btn-gray { background: var(--border); color: var(--text); }
+        .section {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border: 1px solid var(--border);
+        }
+        .section-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 16px;
+        }
+        @media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 500px) { .metrics { grid-template-columns: 1fr; } }
+        .metric {
+            background: var(--bg);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+        .metric-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 6px;
+        }
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+        .metric-value.positive { color: var(--accent); }
+        .metric-value.negative { color: var(--danger); }
+        .metric-sub { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+        .strategy-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        @media (max-width: 600px) { .strategy-grid { grid-template-columns: 1fr; } }
+        .strategy-btn {
+            padding: 16px 20px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .strategy-btn:hover { border-color: var(--text-muted); }
+        .strategy-btn.active {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .strategy-btn .badge {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 6px;
+            background: var(--border);
+            color: var(--text-muted);
+        }
+        .strategy-btn.active .badge { background: var(--accent); color: #fff; }
+        .jogos-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .jogos-table th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+        }
+        .jogos-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        .jogos-table tr:hover { background: rgba(255,255,255,0.02); }
+        .jogos-empty, .jogos-error {
+            padding: 32px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        .jogos-error { color: var(--danger); }
+        .bet-card {
+            background: var(--bg);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 12px;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+        }
+        .bet-card:last-child { margin-bottom: 0; }
+        .bet-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+        .bet-info h3 { font-size: 1rem; font-weight: 600; margin-bottom: 4px; }
+        .bet-info .event-name { font-size: 0.9rem; color: var(--text-muted); }
+        .bet-info .win-condition { font-size: 0.8rem; color: var(--accent); margin-top: 8px; padding: 6px 10px; background: var(--accent-dim); border-radius: 6px; display: inline-block; }
+        .bet-metrics { display: flex; gap: 24px; margin-top: 12px; }
+        .bet-metric .label { font-size: 0.7rem; color: var(--text-muted); }
+        .bet-metric .value { font-size: 1rem; font-weight: 600; }
+        .loading { text-align: center; padding: 24px; color: var(--text-muted); }
+        .loading::after { content: ''; animation: dots 1.5s steps(4,end) infinite; }
+        @keyframes dots {
+            0%,20% { content: '.'; }
+            40% { content: '..'; }
+            60%,100% { content: '...'; }
+        }
+        .stat-card { background: var(--bg); border-radius: 10px; padding: 20px; border: 1px solid var(--border); }
+        .stat-card h3 { font-size: 0.9rem; margin-bottom: 12px; color: var(--text-muted); }
+        .stat-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+        .stat-item:last-child { border-bottom: none; }
+        .stat-item .label { color: var(--text-muted); }
+        .stat-item .value { font-weight: 600; }
+        .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+        .config-field label { display: block; font-size: 0.8rem; font-weight: 500; color: var(--text-muted); margin-bottom: 6px; }
+        .config-field input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.9rem; }
+        input[type="number"] { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+        .bets-section h2, .section h2 { font-size: 1.1rem; margin-bottom: 16px; color: var(--text); }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>Betfair Trading Bot</h1>
+            <p>Monitoramento em tempo real</p>
+        </header>
+
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <span id="status-dot" class="status-dot"></span>
+                <span id="bot-status-text" class="status-text">Bot Offline</span>
+                <span id="last-update" class="status-text"></span>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-green" onclick="controlBot('start')">Iniciar</button>
+                <button class="btn btn-red" onclick="controlBot('stop')">Parar</button>
+                <button class="btn btn-amber" onclick="controlBot('restart')">Reiniciar</button>
+                <button class="btn btn-blue" onclick="updateData()">Atualizar</button>
+                <button class="btn btn-red" onclick="clearDatabase()">Limpar Dados</button>
+            </div>
+        </div>
+
+        <section class="section">
+            <div class="section-title">Estratégias</div>
+            <div class="strategy-grid">
+                <button id="btn-over-05" class="strategy-btn" onclick="toggleStrategy('over_05')">
+                    Over 0.5 Gols <span class="badge">BACK Under 1.5</span>
+                </button>
+                <button id="btn-under-hedge" class="strategy-btn" onclick="toggleStrategy('under_hedge')">
+                    Hedge Under 1.5 <span class="badge">2ª aposta — a partir do 75º min</span>
+                </button>
+                <button id="btn-under-high-hedge" class="strategy-btn" onclick="toggleStrategy('under_high_hedge')">
+                    Under Alta 4.5/5.5/6.5 <span class="badge">até 2 entradas por jogo</span>
+                </button>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">Métricas</div>
+            <div class="metrics" id="metrics">
+                <div class="metric">
+                    <div class="metric-label">Saldo</div>
+                    <div class="metric-value" id="balance-available">R$ --</div>
+                    <div class="metric-sub">disponível</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Lucro Total</div>
+                    <div class="metric-value" id="total-profit">R$ 0.00</div>
+                    <div class="metric-sub" id="profit-delta">0 net</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Apostas</div>
+                    <div class="metric-value" id="total-bets">0</div>
+                    <div class="metric-sub" id="active-bets-delta">0 ativas</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Taxa Sucesso</div>
+                    <div class="metric-value" id="win-rate">0.0%</div>
+                    <div class="metric-sub" id="win-rate-delta">0/0</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Lucro Médio</div>
+                    <div class="metric-value" id="avg-profit">R$ 0.00</div>
+                    <div class="metric-sub">por aposta</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">Jogos ao Vivo</div>
+            <div id="jogos-ao-vivo-container">
+                <div class="loading">Carregando jogos</div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">Configurações</div>
+            <div id="config-container" class="config-grid">
+                    <div class="config-field">
+                        <label>Stake Over 0.5 (R$)</label>
+                        <input type="number" id="config-stake" step="0.1" min="1" />
+                    </div>
+                    <div class="config-field">
+                        <label>Stake Hedge Under (R$)</label>
+                        <input type="number" id="config-under-hedge-stake" step="0.1" min="1" />
+                    </div>
+                    <div class="config-field">
+                        <label>Over 0.5 Odd Mín</label>
+                        <input type="number" id="config-over-05-odds-min" step="0.01" min="1.01" max="2" />
+                    </div>
+                    <div class="config-field">
+                        <label>Over 0.5 Odd Máx</label>
+                        <input type="number" id="config-over-05-odds-max" step="0.01" min="1.01" max="2" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under 1.5 — Odd Mín aceita</label>
+                        <input type="number" id="config-min-odd" step="0.01" min="1.01" max="10" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under 1.5 — Odd Máx aceita</label>
+                        <input type="number" id="config-max-odd" step="0.01" min="1.01" max="100" placeholder="Opcional" />
+                    </div>
+                    <div class="config-field">
+                        <label>Minuto máximo de entrada</label>
+                        <input type="number" id="config-entry-max-minute" step="1" min="1" max="90" title="Só aposta se o jogo estiver neste minuto ou antes (Opção B)" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under 1.5 — Minuto mínimo de entrada</label>
+                        <input type="number" id="config-under-hedge-min-minute" step="1" min="1" max="90" title="Só coloca Under 1.5 se o jogo estiver neste minuto ou depois (recomendado: 75)" />
+                    </div>
+                    <div class="config-field">
+                        <label>Stop-Loss LAY — Odd de disparo</label>
+                        <input type="number" id="config-stop-loss-threshold" step="0.1" min="1.5" max="10" title="Se a odd do Over 0.5 subir acima deste valor, o bot faz LAY para travar a perda (Opção A)" />
+                    </div>
+                    <div class="config-field">
+                        <label>Stake Under Alta 4.5/5.5/6.5 (R$)</label>
+                        <input type="number" id="config-under-high-hedge-stake" step="0.1" min="1" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under Alta — Odd Mín (2ª entrada)</label>
+                        <input type="number" id="config-under-high-hedge-min-odd" step="0.01" min="1.01" max="5" title="Odd mínima para 2ª entrada (recomendado: 1.15)" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under Alta — Odd Mín 1ª entrada</label>
+                        <input type="number" id="config-under-high-hedge-min-odd-first-entry" step="0.01" min="1.01" max="5" title="Odd mínima para 1ª entrada — mais baixa para cobrir todos os jogos (recomendado: 1.08)" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under Alta — Minuto de disparo</label>
+                        <input type="number" id="config-under-high-hedge-trigger-minute" step="1" min="1" max="89" title="Entra com Under Alta a partir deste minuto" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under Alta — Minuto final</label>
+                        <input type="number" id="config-under-high-hedge-end-minute" step="1" min="1" max="90" title="Último minuto permitido para Under Alta" />
+                    </div>
+                    <div class="config-field">
+                        <label>Under Alta — Máx entradas por jogo</label>
+                        <input type="number" id="config-under-high-hedge-max-entries" step="1" min="1" max="5" title="Quantidade máxima de entradas Under Alta no mesmo evento" />
+                    </div>
+                    <div class="config-field">
+                        <label>LAY Parcial Over 0.5 — Ativar</label>
+                        <input type="checkbox" id="config-partial-stop-loss-lay-enabled" title="Quando 0-0, 85+ min e sem hedge: LAY Over 0.5 para travar meia perda" />
+                    </div>
+                    <div class="config-field">
+                        <label>LAY Parcial — Minuto mínimo</label>
+                        <input type="number" id="config-partial-stop-loss-lay-min-minute" step="1" min="80" max="90" title="Só dispara a partir deste minuto (recomendado: 85)" />
+                    </div>
+                    <div class="config-field">
+                        <label>LAY Parcial — % do stake (0–1)</label>
+                        <input type="number" id="config-partial-stop-loss-lay-stake-pct" step="0.1" min="0.3" max="1" title="Ex: 0.5 = half stake para recuperar metade da perda" />
+                    </div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:center;margin-top:16px;">
+                <button id="save-config-btn" class="btn btn-green">Salvar</button>
+                <span id="config-message" style="color:var(--accent);font-size:0.9rem;"></span>
+            </div>
+            <div style="margin-top:12px;padding:12px;background:rgba(245,158,11,0.1);border-radius:8px;border-left:4px solid var(--warning);font-size:0.85rem;color:var(--text-muted);">
+                Reinicie o bot para aplicar as mudanças.
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">Apostas Ativas</div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+                <input type="number" id="filter-min-odd-active" step="0.01" placeholder="Odd mín" style="width:90px;" />
+                <span class="status-text">–</span>
+                <input type="number" id="filter-max-odd-active" step="0.01" placeholder="Odd máx" style="width:90px;" />
+                <button class="btn btn-blue" onclick="applyOddFilter('active')">Filtrar</button>
+                <button class="btn btn-gray" onclick="clearOddFilter('active')">Limpar</button>
+            </div>
+            <div id="bets-container"><div class="loading">Carregando apostas</div></div>
+        </section>
+
+        <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">
+            <div class="stat-card">
+                <h3>📊 Estatísticas</h3>
+                <div class="stat-item">
+                    <span class="label">Total de Apostas:</span>
+                    <span class="value" id="stat-total-bets">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Apostas com Lucro:</span>
+                    <span class="value" id="stat-profit-bets">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Apostas com Perda:</span>
+                    <span class="value" id="stat-loss-bets">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Apostas Ativas:</span>
+                    <span class="value" id="stat-active-bets">0</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>⚽ Por Esporte</h3>
+                <div class="stat-item">
+                    <span class="label">⚽ Futebol:</span>
+                    <span class="value" id="stat-soccer">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">🏒 Hóquei:</span>
+                    <span class="value" id="stat-hockey">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">🎾 Tênis:</span>
+                    <span class="value" id="stat-tennis">0</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>💰 Conta</h3>
+                <div class="stat-item">
+                    <span class="label">Saldo Disponível:</span>
+                    <span class="value" id="stat-available">R$ --</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Saldo Total:</span>
+                    <span class="value" id="stat-total">R$ --</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Exposição:</span>
+                    <span class="value" id="stat-exposure">R$ 0.00</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Carregar configurações ao iniciar
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                if (!response.ok) throw new Error('Erro ao carregar configurações');
+                const result = await response.json();
+                if (result.success && result.config) {
+                    document.getElementById('config-stake').value = result.config.stake || 15.0;
+                    document.getElementById('config-under-hedge-stake').value = result.config.under_hedge_stake || 15.0;
+                    document.getElementById('config-over-05-odds-min').value = result.config.over_05_odds_min || 1.15;
+                    document.getElementById('config-over-05-odds-max').value = result.config.over_05_odds_max || 1.26;
+                    document.getElementById('config-min-odd').value = result.config.min_odd || 2.15;
+                    document.getElementById('config-max-odd').value = result.config.max_odd || '';
+                    document.getElementById('config-entry-max-minute').value = result.config.entry_max_minute || 25;
+                    document.getElementById('config-stop-loss-threshold').value = result.config.stop_loss_lay_threshold || 2.0;
+                    document.getElementById('config-under-hedge-min-minute').value = result.config.under_hedge_min_minute || 75;
+                    document.getElementById('config-under-high-hedge-stake').value = result.config.under_high_hedge_stake || 15.0;
+                    document.getElementById('config-under-high-hedge-min-odd').value = result.config.under_high_hedge_min_odd || 1.15;
+                    document.getElementById('config-under-high-hedge-min-odd-first-entry').value = result.config.under_high_hedge_min_odd_first_entry || 1.08;
+                    document.getElementById('config-under-high-hedge-trigger-minute').value = result.config.under_high_hedge_trigger_minute || 1;
+                    document.getElementById('config-under-high-hedge-end-minute').value = result.config.under_high_hedge_end_minute || 88;
+                    document.getElementById('config-under-high-hedge-max-entries').value = result.config.under_high_hedge_max_entries || 2;
+                    document.getElementById('config-partial-stop-loss-lay-enabled').checked = result.config.partial_stop_loss_lay_enabled || false;
+                    document.getElementById('config-partial-stop-loss-lay-min-minute').value = result.config.partial_stop_loss_lay_min_minute || 85;
+                    document.getElementById('config-partial-stop-loss-lay-stake-pct').value = result.config.partial_stop_loss_lay_stake_pct || 0.5;
+                }
+            } catch (error) {
+                console.error('Erro ao carregar configurações:', error);
+            }
+        }
+
+        // Salvar configurações
+        async function saveConfig() {
+            const messageEl = document.getElementById('config-message');
+            messageEl.textContent = 'Salvando...';
+            messageEl.style.color = '#7f8c8d';
+            
+            try {
+                const maxOddValue = document.getElementById('config-max-odd').value;
+                const config = {
+                    stake: parseFloat(document.getElementById('config-stake').value),
+                    under_hedge_stake: parseFloat(document.getElementById('config-under-hedge-stake').value),
+                    over_05_odds_min: parseFloat(document.getElementById('config-over-05-odds-min').value),
+                    over_05_odds_max: parseFloat(document.getElementById('config-over-05-odds-max').value),
+                    min_odd: parseFloat(document.getElementById('config-min-odd').value),
+                    max_odd: maxOddValue ? parseFloat(maxOddValue) : null,
+                    entry_max_minute: parseInt(document.getElementById('config-entry-max-minute').value),
+                    stop_loss_lay_threshold: parseFloat(document.getElementById('config-stop-loss-threshold').value),
+                    under_hedge_min_minute: parseInt(document.getElementById('config-under-hedge-min-minute').value),
+                    under_high_hedge_stake: parseFloat(document.getElementById('config-under-high-hedge-stake').value),
+                    under_high_hedge_min_odd: parseFloat(document.getElementById('config-under-high-hedge-min-odd').value),
+                    under_high_hedge_min_odd_first_entry: parseFloat(document.getElementById('config-under-high-hedge-min-odd-first-entry').value),
+                    under_high_hedge_trigger_minute: parseInt(document.getElementById('config-under-high-hedge-trigger-minute').value),
+                    under_high_hedge_end_minute: parseInt(document.getElementById('config-under-high-hedge-end-minute').value),
+                    under_high_hedge_max_entries: parseInt(document.getElementById('config-under-high-hedge-max-entries').value),
+                    partial_stop_loss_lay_enabled: document.getElementById('config-partial-stop-loss-lay-enabled').checked,
+                    partial_stop_loss_lay_min_minute: parseInt(document.getElementById('config-partial-stop-loss-lay-min-minute').value),
+                    partial_stop_loss_lay_stake_pct: parseFloat(document.getElementById('config-partial-stop-loss-lay-stake-pct').value),
+                };
+                
+                if (config.stake < 1) {
+                    throw new Error('Stake deve ser pelo menos R$ 1.00');
+                }
+                if (config.under_hedge_stake < 1) {
+                    throw new Error('Stake do Hedge deve ser pelo menos R$ 1.00');
+                }
+                if (config.over_05_odds_min < 1.01 || config.over_05_odds_min > 2) {
+                    throw new Error('Over 0.5 Odd Mín deve estar entre 1.01 e 2');
+                }
+                if (config.over_05_odds_max < 1.01 || config.over_05_odds_max > 2) {
+                    throw new Error('Over 0.5 Odd Máx deve estar entre 1.01 e 2');
+                }
+                if (config.over_05_odds_max < config.over_05_odds_min) {
+                    throw new Error('Over 0.5 Odd Máx deve ser >= Odd Mín');
+                }
+                if (config.min_odd < 1.01 || config.min_odd > 10) {
+                    throw new Error('Odd mínima do Under 1.5 deve estar entre 1.01 e 10');
+                }
+                if (config.max_odd !== null && (config.max_odd < 1.01 || config.max_odd > 100)) {
+                    throw new Error('Odd máxima do Under 1.5 deve estar entre 1.01 e 100 ou vazio');
+                }
+                if (config.max_odd !== null && config.max_odd <= config.min_odd) {
+                    throw new Error('Odd máxima do Under 1.5 deve ser maior que a mínima');
+                }
+                if (config.entry_max_minute < 1 || config.entry_max_minute > 90) {
+                    throw new Error('Minuto máximo de entrada deve estar entre 1 e 90');
+                }
+                if (config.stop_loss_lay_threshold < 1.5 || config.stop_loss_lay_threshold > 10) {
+                    throw new Error('Stop-Loss LAY odd deve estar entre 1.5 e 10');
+                }
+                if (config.under_hedge_min_minute < 1 || config.under_hedge_min_minute > 90) {
+                    throw new Error('Minuto mínimo do Under 1.5 deve estar entre 1 e 90');
+                }
+                if (config.under_high_hedge_stake < 1) {
+                    throw new Error('Stake do Under Alta deve ser pelo menos R$ 1.00');
+                }
+                if (config.under_high_hedge_min_odd < 1.01 || config.under_high_hedge_min_odd > 5) {
+                    throw new Error('Odd mínima do Under Alta (2ª entrada) deve estar entre 1.01 e 5');
+                }
+                if (config.under_high_hedge_min_odd_first_entry < 1.01 || config.under_high_hedge_min_odd_first_entry > 5) {
+                    throw new Error('Odd mínima do Under Alta (1ª entrada) deve estar entre 1.01 e 5');
+                }
+                if (config.under_high_hedge_trigger_minute < 1 || config.under_high_hedge_trigger_minute > 89) {
+                    throw new Error('Minuto de disparo do Under Alta deve estar entre 1 e 89');
+                }
+                if (config.under_high_hedge_end_minute < 1 || config.under_high_hedge_end_minute > 90) {
+                    throw new Error('Minuto final do Under Alta deve estar entre 1 e 90');
+                }
+                if (config.under_high_hedge_end_minute <= config.under_high_hedge_trigger_minute) {
+                    throw new Error('Minuto final do Under Alta deve ser maior que o minuto de disparo');
+                }
+                if (config.under_high_hedge_max_entries < 1 || config.under_high_hedge_max_entries > 5) {
+                    throw new Error('Máx entradas do Under Alta deve estar entre 1 e 5');
+                }
+                if (config.partial_stop_loss_lay_min_minute < 80 || config.partial_stop_loss_lay_min_minute > 90) {
+                    throw new Error('Minuto mínimo do LAY Parcial deve estar entre 80 e 90');
+                }
+                if (config.partial_stop_loss_lay_stake_pct < 0.3 || config.partial_stop_loss_lay_stake_pct > 1) {
+                    throw new Error('% do stake do LAY Parcial deve estar entre 0.3 e 1');
+                }
+                
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config),
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    messageEl.textContent = '✅ ' + result.message;
+                    messageEl.style.color = 'var(--success)';
+                    setTimeout(() => {
+                        messageEl.textContent = '';
+                    }, 5000);
+                } else {
+                    throw new Error(result.message || 'Erro ao salvar');
+                }
+            } catch (error) {
+                messageEl.textContent = '❌ ' + error.message;
+                messageEl.style.color = 'var(--danger)';
+                setTimeout(() => {
+                    messageEl.textContent = '';
+                }, 5000);
+            }
+        }
+
+        // Event listeners
+        document.getElementById('save-config-btn').addEventListener('click', saveConfig);
+        
+        // Carregar configurações ao iniciar
+        loadConfig();
+
+        // Função para buscar dados da API
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/data');
+                if (!response.ok) throw new Error('Erro ao buscar dados');
+                return await response.json();
+            } catch (error) {
+                console.error('Erro:', error);
+                return null;
+            }
+        }
+
+        async function loadJogosAoVivo() {
+            const container = document.getElementById('jogos-ao-vivo-container');
+            try {
+                const response = await fetch('/api/jogos-ao-vivo');
+                const result = await response.json();
+                if (!result.success) {
+                    container.innerHTML = `<div class="jogos-error">${result.error || 'Erro ao carregar'}</div>`;
+                    return;
+                }
+                const jogos = result.jogos || [];
+                if (jogos.length === 0) {
+                    container.innerHTML = '<div class="jogos-empty">Nenhum jogo ao vivo no momento.</div>';
+                    return;
+                }
+                let html = '<table class="jogos-table"><thead><tr><th>Jogo</th><th>Tempo</th><th>Placar</th><th>Odds (1-X-2)</th></tr></thead><tbody>';
+                jogos.forEach(j => {
+                    const nome = (j.jogo || '').length > 50 ? (j.jogo || '').substring(0, 47) + '...' : (j.jogo || '-');
+                    html += `<tr><td>${nome}</td><td>${j.tempo || '-'}</td><td>${j.placar || '-'}</td><td>${j.odds || '-'}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (e) {
+                container.innerHTML = `<div class="jogos-error">Erro: ${e.message}</div>`;
+            }
+        }
+
+        // Função para buscar informações do mercado
+        async function fetchMarketInfo(marketId) {
+            try {
+                const response = await fetch(`/api/market/${marketId}`);
+                if (!response.ok) throw new Error('Erro ao buscar info do mercado');
+                return await response.json();
+            } catch (error) {
+                console.error('Erro:', error);
+                return null;
+            }
+        }
+
+        // Função para buscar informações do jogo (placar, status)
+        async function fetchGameInfo(betId) {
+            try {
+                const response = await fetch(`/api/game/${betId}/info`);
+                if (!response.ok) throw new Error('Erro ao buscar info do jogo');
+                const result = await response.json();
+                return result.game_info || null;
+            } catch (error) {
+                console.error('Erro ao buscar informações do jogo:', error);
+                return null;
+            }
+        }
+
+        // Função para atualizar dados
+        async function updateData() {
+            const updateEl = document.getElementById('last-update');
+            updateEl.textContent = 'Atualizando...';
+            
+            const data = await fetchData();
+            if (!data) {
+                updateEl.textContent = 'Erro ao atualizar';
+                return;
+            }
+
+            // Atualizar métricas
+            updateMetrics(data);
+            
+            // Atualizar apostas ativas (armazenar originalmente sem filtro)
+            allActiveBets = data.bets_active || data.bets || [];
+            await updateBets(allActiveBets);
+            
+            // Atualizar estatísticas
+            updateStats(data.stats || {});
+            
+            // Atualizar status do bot
+            updateBotStatus(data.bot_status || false);
+            
+            // Atualizar jogos ao vivo
+            loadJogosAoVivo();
+
+            // Atualizar timestamp
+            const now = new Date();
+            updateEl.textContent = `Última atualização: ${now.toLocaleTimeString('pt-BR')}`;
+        }
+
+        // Atualizar métricas
+        function updateMetrics(data) {
+            const balance = data.balance || {};
+            const stats = data.stats || {};
+            
+            document.getElementById('balance-available').textContent = 
+                balance.available ? `R$ ${balance.available.toFixed(2)}` : 'R$ --';
+            
+            // Calcular lucro total das apostas fechadas
+            let totalProfit = parseFloat(stats.total_profit || 0);
+            
+            // Se não tiver no stats, calcular das apostas fechadas
+            if (totalProfit === 0 && data.bets_history) {
+                totalProfit = data.bets_history.reduce((sum, bet) => {
+                    if (bet.profit_loss !== null && bet.profit_loss !== undefined && bet.size) {
+                        const profit = parseFloat(bet.size) * (parseFloat(bet.profit_loss) / 100);
+                        return sum + profit;
+                    }
+                    return sum;
+                }, 0);
+            }
+            
+            const profitEl = document.getElementById('total-profit');
+            profitEl.textContent = `R$ ${totalProfit.toFixed(2)}`;
+            profitEl.classList.toggle('positive', totalProfit > 0);
+            profitEl.classList.toggle('negative', totalProfit < 0);
+            
+            const profitBets = parseInt(stats.profit_bets || 0);
+            const lossBets = parseInt(stats.loss_bets || 0);
+            document.getElementById('profit-delta').textContent = 
+                `${profitBets - lossBets} net`;
+            
+            document.getElementById('total-bets').textContent = stats.total_bets || 0;
+            document.getElementById('active-bets-delta').textContent = 
+                `${stats.active_bets || 0} ativas`;
+            
+            // Taxa de sucesso: apenas apostas fechadas
+            const closedBets = profitBets + lossBets;
+            const winRate = closedBets > 0 
+                ? ((profitBets / closedBets) * 100).toFixed(1)
+                : 0;
+            document.getElementById('win-rate').textContent = `${winRate}%`;
+            document.getElementById('win-rate-delta').textContent = 
+                `${profitBets}/${closedBets}`;
+            
+            // Lucro médio: apenas apostas fechadas
+            const avgProfit = closedBets > 0 
+                ? (totalProfit / closedBets).toFixed(2)
+                : 0;
+            document.getElementById('avg-profit').textContent = `R$ ${avgProfit}`;
+        }
+
+        // Variáveis para armazenar apostas originais e filtros
+        let allActiveBets = [];
+        let activeOddFilter = { min: null, max: null };
+
+        // Aplicar filtro de odd
+        function applyOddFilter(type) {
+            if (type === 'active') {
+                const minOdd = document.getElementById('filter-min-odd-active').value;
+                const maxOdd = document.getElementById('filter-max-odd-active').value;
+                activeOddFilter.min = minOdd ? parseFloat(minOdd) : null;
+                activeOddFilter.max = maxOdd ? parseFloat(maxOdd) : null;
+                updateBets(allActiveBets);
+            }
+        }
+
+        // Limpar filtro de odd
+        function clearOddFilter(type) {
+            if (type === 'active') {
+                document.getElementById('filter-min-odd-active').value = '';
+                document.getElementById('filter-max-odd-active').value = '';
+                activeOddFilter = { min: null, max: null };
+                updateBets(allActiveBets);
+            }
+        }
+
+        // Filtrar apostas por odd
+        function filterBetsByOdd(bets, filter) {
+            if (!filter || (!filter.min && !filter.max)) {
+                return bets;
+            }
+            
+            return bets.filter(bet => {
+                const price = parseFloat(bet.price || bet.priceSize?.price || 0);
+                if (price === 0) return true; // Se não tem odd, mantém
+                
+                if (filter.min && price < filter.min) return false;
+                if (filter.max && price > filter.max) return false;
+                return true;
+            });
+        }
+
+        // Atualizar apostas
+        async function updateBets(bets) {
+            const container = document.getElementById('bets-container');
+            
+            // Armazenar apostas originais
+            allActiveBets = bets || [];
+            
+            // Aplicar filtro de odd se existir
+            let filteredBets = filterBetsByOdd(allActiveBets, activeOddFilter);
+            
+            if (!filteredBets || filteredBets.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <p>Nenhuma aposta ativa no momento${activeOddFilter.min || activeOddFilter.max ? ' com os filtros aplicados' : ''}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Filtrar apostas sem nome válido
+            const validBets = [];
+            for (const bet of filteredBets) {
+                // Verificar se tem nome válido
+                const eventName = bet.event_name || '';
+                const hasValidName = eventName && 
+                                   eventName !== '' && 
+                                   eventName !== 'N/A' && 
+                                   eventName !== 'Nome não disponível' &&
+                                   !eventName.toLowerCase().includes('carregando');
+                
+                if (hasValidName) {
+                    validBets.push(bet);
+                }
+            }
+
+            if (validBets.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <p>Nenhuma aposta ativa com informações completas no momento</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `<p style="margin-bottom: 1rem; color: #7f8c8d;"><strong>${validBets.length} apostas ativas encontradas</strong></p>`;
+            
+            for (const bet of validBets) {
+                // Usar event_name do banco de dados diretamente, só buscar da API se não existir
+                let marketInfo = null;
+                if (!bet.event_name || bet.event_name === '' || bet.event_name === 'N/A') {
+                    marketInfo = await fetchMarketInfo(bet.market_id);
+                }
+                
+                // Buscar informações do jogo (placar, status)
+                let gameInfo = null;
+                if (bet.bet_id) {
+                    gameInfo = await fetchGameInfo(bet.bet_id);
+                    // Se não encontrou no banco, usar dados do banco se disponíveis
+                    if (!gameInfo) {
+                        gameInfo = {
+                            game_score: bet.game_score,
+                            game_status: bet.game_status,
+                            market_status: bet.market_status,
+                            runner_status: bet.runner_status,
+                            is_finished: bet.market_status === 'CLOSED' || bet.market_status === 'SUSPENDED'
+                        };
+                    }
+                }
+                
+                const betCard = createBetCard(bet, marketInfo, gameInfo);
+                container.appendChild(betCard);
+            }
+        }
+
+        // Criar card de aposta
+        function createBetCard(bet, marketInfo, gameInfo = null) {
+            const card = document.createElement('div');
+            card.className = 'bet-card';
+            
+            // Usar sport do banco de dados se disponível
+            let sport = '⚽ Futebol';
+            let isSoccer = true;
+            let marketType = 'Over 0.5 Goals';
+
+            if (bet.sport) {
+                const sportUpper = bet.sport.toUpperCase();
+                if (sportUpper.includes('SOCCER') || sportUpper.includes('FUTEBOL')) {
+                    sport = '⚽ Futebol';
+                    isSoccer = true;
+                    const strat = (bet.strategy || '').toLowerCase();
+                    if (strat.includes('over 0.5') || strat.includes('over_05')) {
+                        marketType = 'Over 0.5 Goals';
+                    } else if (strat.includes('under') && strat.includes('hedge')) {
+                        // e.g. "Back Under 6.5 Hedge"
+                        const m = bet.strategy.match(/Under\s+([\d.]+)/i);
+                        marketType = m ? `Under ${m[1]} (Hedge)` : 'Under 1.5 (Hedge)';
+                    } else if (strat.includes('under')) {
+                        const m = bet.strategy.match(/Under\s+([\d.]+)/i);
+                        marketType = m ? `Under ${m[1]} Goals` : 'Under Goals';
+                    } else {
+                        marketType = bet.strategy || 'Over 0.5 Goals';
+                    }
+                } else if (sportUpper.includes('TENNIS') || sportUpper.includes('TÊNIS')) {
+                    sport = '🎾 Tênis';
+                    isSoccer = false;
+                    marketType = bet.strategy || 'Match Odds';
+                } else if (sportUpper.includes('HOCKEY') || sportUpper.includes('HÓQUEI')) {
+                    sport = '🏒 Hóquei';
+                    isSoccer = false;
+                    marketType = bet.strategy || 'Total Goals';
+                }
+            } else {
+                // Fallback para apostas antigas sem campo sport
+                isSoccer = true;
+                marketType = 'Over 0.5 Goals';
+            }
+            // Verificar se é BACK ou LAY
+            const isBack = bet.side === 'BACK' || !bet.side || bet.side === 'N/A';
+            // Condição de vitória baseada no marketType real
+            let winCondition = '';
+            if (isSoccer) {
+                if (marketType.includes('Over 0.5')) {
+                    winCondition = 'Para GANHAR: O jogo deve ter pelo menos 1 gol ✅';
+                } else if (marketType.includes('Hedge') || marketType.startsWith('Under')) {
+                    const m = marketType.match(/[\d.]+/);
+                    const val = m ? m[0] : 'X.5';
+                    winCondition = `Para GANHAR: O jogo deve ter MENOS de ${val} gols ✅`;
+                } else {
+                    winCondition = 'Para GANHAR: O jogo deve ter pelo menos 1 gol ✅';
+                }
+            } else {
+                winCondition = 'Para GANHAR: O favorito deve vencer o jogo';
+            }
+            
+            // Priorizar event_name do banco de dados, depois marketInfo da API, por último fallback
+            const eventName = bet.event_name || marketInfo?.event_name || 'Nome não disponível';
+            const startTime = marketInfo?.start_time || bet.placed_date;
+            let timeRange = 'Horário não disponível';
+            
+            if (startTime && startTime !== 'N/A') {
+                try {
+                    const start = new Date(startTime);
+                    const end = new Date(start);
+                    if (isSoccer) {
+                        end.setMinutes(end.getMinutes() + 105); // 90min + intervalo
+                    }
+                    timeRange = `${start.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})} - ${end.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})}`;
+                } catch (e) {
+                    timeRange = 'Horário não disponível';
+                }
+            }
+            
+            const price = bet.price || bet.priceSize?.price || 'N/A';
+            const size = bet.size || bet.priceSize?.size || 'N/A';
+            const liability = bet.side === 'LAY' && price !== 'N/A' && size !== 'N/A'
+                ? (parseFloat(size) * (parseFloat(price) - 1)).toFixed(2)
+                : '0.00';
+            
+            const placedDate = bet.placed_date || bet.placedDate;
+            let dateStr = '--';
+            if (placedDate && placedDate !== 'N/A') {
+                try {
+                    const date = new Date(placedDate);
+                    dateStr = date.toLocaleString('pt-BR');
+                } catch (e) {}
+            }
+            
+            // Verificar se é aposta fechada e mostrar resultado
+            const isClosed = bet.status && bet.status !== 'ACTIVE' && bet.status !== 'active';
+            let resultBadge = '';
+            let resultColor = '';
+            let profitValue = 0;
+            
+            if (isClosed) {
+                // Priorizar gross_profit da API de atividade se disponível
+                if (bet.gross_profit !== null && bet.gross_profit !== undefined) {
+                    const grossProfit = parseFloat(bet.gross_profit);
+                    profitValue = grossProfit;
+                    
+                    if (grossProfit > 0) {
+                        resultBadge = `✅ Ganhou: +R$ ${grossProfit.toFixed(2)}`;
+                        resultColor = '#27ae60';
+                        if (bet.net_profit !== null && bet.net_profit !== undefined) {
+                            resultBadge += ` (Líquido: R$ ${parseFloat(bet.net_profit).toFixed(2)})`;
+                        }
+                    } else if (grossProfit < 0) {
+                        resultBadge = `❌ Perdeu: -R$ ${Math.abs(grossProfit).toFixed(2)}`;
+                        resultColor = '#e74c3c';
+                        if (bet.net_profit !== null && bet.net_profit !== undefined) {
+                            resultBadge += ` (Líquido: R$ ${parseFloat(bet.net_profit).toFixed(2)})`;
+                        }
+                    } else {
+                        resultBadge = `⚪ Empate: R$ 0.00`;
+                        resultColor = '#95a5a6';
+                    }
+                } else if (bet.profit_loss !== null && bet.profit_loss !== undefined) {
+                    // Fallback para profit_loss calculado
+                    const profitLoss = parseFloat(bet.profit_loss);
+                    const stake = parseFloat(bet.size || bet.stake || 0);
+                    profitValue = stake * (profitLoss / 100);
+                    
+                    if (profitLoss > 0) {
+                        resultBadge = `✅ Ganhou: +R$ ${profitValue.toFixed(2)} (+${profitLoss.toFixed(2)}%)`;
+                        resultColor = '#27ae60';
+                    } else if (profitLoss < 0) {
+                        resultBadge = `❌ Perdeu: -R$ ${Math.abs(profitValue).toFixed(2)} (${profitLoss.toFixed(2)}%)`;
+                        resultColor = '#e74c3c';
+                    } else {
+                        resultBadge = `⚪ Empate: R$ 0.00 (0%)`;
+                        resultColor = '#95a5a6';
+                    }
+                } else {
+                    // Se não tem profit_loss mas está fechada, mostrar status
+                    if (bet.status.includes('PROFIT')) {
+                        resultBadge = `✅ Ganhou`;
+                        resultColor = '#27ae60';
+                    } else if (bet.status.includes('LOSS')) {
+                        resultBadge = `❌ Perdeu`;
+                        resultColor = '#e74c3c';
+                    }
+                }
+                if (bet.close_reason) {
+                    resultBadge += ` - ${bet.close_reason}`;
+                }
+            }
+            
+            card.innerHTML = `
+                <div class="bet-header">
+                    <div class="bet-info">
+                        <h3>${sport}</h3>
+                        <div class="event-name">${eventName}</div>
+                        <div class="market-type">📊 Mercado: ${marketType} (${bet.side || 'BACK'})</div>
+                        <div class="win-condition">✅ ${winCondition}</div>
+                        ${isClosed && resultBadge ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: ${resultColor}20; border-radius: 5px; color: ${resultColor}; font-weight: 600; font-size: 0.9rem;">${resultBadge}</div>` : ''}
+                        ${bet.game_score ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: #3498db20; border-radius: 5px; color: #2980b9; font-weight: 600; font-size: 1rem;">⚽ Placar: ${bet.game_score}</div>` : (gameInfo && gameInfo.game_score ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: #3498db20; border-radius: 5px; color: #2980b9; font-weight: 600; font-size: 1rem;">⚽ Placar: ${gameInfo.game_score}</div>` : '')}
+                        ${bet.runner_status ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: ${bet.runner_status === 'WINNER' ? '#27ae6020' : bet.runner_status === 'LOSER' ? '#e74c3c20' : '#95a5a620'}; border-radius: 5px; color: ${bet.runner_status === 'WINNER' ? '#27ae60' : bet.runner_status === 'LOSER' ? '#e74c3c' : '#7f8c8d'}; font-weight: 600; font-size: 0.9rem;">📊 Resultado: ${bet.runner_status === 'WINNER' ? '✅ Ganhou' : bet.runner_status === 'LOSER' ? '❌ Perdeu' : bet.runner_status}</div>` : ''}
+                        ${bet.market_status ? `<div style="margin-top: 0.3rem; font-size: 0.8rem; color: #7f8c8d;">Mercado: ${bet.market_status === 'OPEN' ? '🟢 Aberto' : bet.market_status === 'CLOSED' ? '🔴 Fechado' : bet.market_status === 'SUSPENDED' ? '⏸️ Suspenso' : bet.market_status}</div>` : (gameInfo && gameInfo.market_status && gameInfo.market_status !== 'UNKNOWN' ? `<div style="margin-top: 0.3rem; font-size: 0.8rem; color: #7f8c8d;">Mercado: ${gameInfo.market_status === 'OPEN' ? '🟢 Aberto' : gameInfo.market_status === 'CLOSED' ? '🔴 Fechado' : gameInfo.market_status === 'SUSPENDED' ? '⏸️ Suspenso' : gameInfo.market_status}</div>` : '')}
+                        <div class="game-time">⏰ Horário: ${timeRange}</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.75rem; color: #95a5a6;">
+                            Market ID: ${bet.market_id} | Bet ID: ${bet.bet_id?.substring(0, 12)}...
+                        </div>
+                    </div>
+                    <div class="bet-metrics">
+                        <div class="bet-metric">
+                            <div class="label">💰 Stake</div>
+                            <div class="value">R$ ${size}</div>
+                            ${bet.side === 'LAY' ? `<div style="font-size: 0.75rem; color: #e74c3c; margin-top: 0.3rem;">Liab: R$ ${liability}</div>` : ''}
+                            ${isClosed && profitValue !== 0 ? `<div style="font-size: 0.75rem; color: ${profitValue > 0 ? '#27ae60' : '#e74c3c'}; margin-top: 0.3rem; font-weight: 600;">${profitValue > 0 ? '+' : ''}R$ ${profitValue.toFixed(2)}</div>` : ''}
+                        </div>
+                        <div class="bet-metric">
+                            <div class="label">📊 Odd</div>
+                            <div class="value">${price}</div>
+                            <div style="font-size: 0.75rem; color: ${isClosed ? (bet.profit_loss > 0 ? '#27ae60' : bet.profit_loss < 0 ? '#e74c3c' : '#95a5a6') : '#27ae60'}; margin-top: 0.3rem;">
+                                ${isClosed ? (bet.profit_loss > 0 ? '✅ Fechada' : bet.profit_loss < 0 ? '❌ Fechada' : '⚪ Fechada') : '✅ Executada'}
+                            </div>
+                        </div>
+                        <div class="bet-metric">
+                            <div class="label">📅 Data</div>
+                            <div class="value" style="font-size: 0.9rem;">${dateStr}</div>
+                            ${bet.close_time ? `<div style="font-size: 0.7rem; color: #95a5a6; margin-top: 0.2rem;">Fechada: ${new Date(bet.close_time).toLocaleString('pt-BR')}</div>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            return card;
+        }
+
+        // Atualizar estatísticas
+        function updateStats(stats) {
+            document.getElementById('stat-total-bets').textContent = stats.total_bets || 0;
+            document.getElementById('stat-profit-bets').textContent = stats.profit_bets || 0;
+            document.getElementById('stat-loss-bets').textContent = stats.loss_bets || 0;
+            document.getElementById('stat-active-bets').textContent = stats.active_bets || 0;
+            document.getElementById('stat-soccer').textContent = stats.soccer_bets || 0;
+            document.getElementById('stat-hockey').textContent = stats.hockey_bets || 0;
+            document.getElementById('stat-tennis').textContent = stats.tennis_bets || 0;
+        }
+
+        // Atualizar status do bot
+        function updateBotStatus(isOnline) {
+            const dot = document.getElementById('status-dot');
+            const text = document.getElementById('bot-status-text');
+            if (dot) dot.classList.toggle('online', isOnline);
+            if (text) text.textContent = isOnline ? 'Bot Online' : 'Bot Offline';
+        }
+
+        // Verificar disponibilidade do Docker
+        async function checkDockerAvailability() {
+            try {
+                const response = await fetch('/api/bot/status');
+                const result = await response.json();
+                
+                const buttons = document.querySelectorAll('.btn-success, .btn-danger, .btn-warning');
+                if (result.can_control) {
+                    buttons.forEach(btn => {
+                        btn.disabled = false;
+                        btn.style.opacity = '1';
+                    });
+                } else {
+                    buttons.forEach(btn => {
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        btn.title = 'Docker não disponível. Execute comandos manualmente no terminal.';
+                    });
+                }
+            } catch (error) {
+                console.error('Erro ao verificar Docker:', error);
+            }
+        }
+
+        // Função para fazer Cash Out de uma aposta
+        async function cancelBet(marketId, betId, buttonElement) {
+            if (!confirm('Tem certeza que deseja fazer Cash Out desta aposta?')) {
+                return;
+            }
+            
+            // Desabilitar botão e mostrar loading
+            const originalText = buttonElement.innerHTML;
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = '⏳ Processando...';
+            buttonElement.style.opacity = '0.6';
+            
+            try {
+                const response = await fetch(`/api/bet/${betId}/cashout`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`✅ ${result.message}`);
+                    // Atualizar dados após cashout
+                    setTimeout(() => {
+                        updateData();
+                    }, 1000);
+                } else {
+                    alert(`❌ Erro: ${result.message || 'Não foi possível fazer cashout'}`);
+                    // Reabilitar botão
+                    buttonElement.disabled = false;
+                    buttonElement.innerHTML = originalText;
+                    buttonElement.style.opacity = '1';
+                }
+            } catch (error) {
+                console.error('Erro ao fazer cashout:', error);
+                alert(`❌ Erro ao fazer cashout: ${error.message}`);
+                // Reabilitar botão
+                buttonElement.disabled = false;
+                buttonElement.innerHTML = originalText;
+                buttonElement.style.opacity = '1';
+            }
+        }
+
+        // Controlar bot
+        async function controlBot(action) {
+            try {
+                const response = await fetch(`/api/bot/${action}`, { method: 'POST' });
+                const result = await response.json();
+                if (result.success) {
+                    const actionText = action === 'start' ? 'iniciado' : action === 'stop' ? 'parado' : 'reiniciado';
+                    alert(`✅ Bot ${actionText} com sucesso!`);
+                    setTimeout(updateData, 2000);
+                } else {
+                    const errorMsg = result.message || 'Não foi possível executar a ação';
+                    alert(`❌ Erro: ${errorMsg}\n\nExecute manualmente no terminal:\ndocker compose -f docker-compose-completo.yml ${action} betfair-bot`);
+                }
+            } catch (error) {
+                alert(`❌ Erro ao controlar bot: ${error.message}\n\nExecute manualmente no terminal:\ndocker compose -f docker-compose-completo.yml ${action} betfair-bot`);
+            }
+        }
+
+        // Limpar banco de dados e cache
+        async function clearDatabase() {
+            if (!confirm('⚠️ ATENÇÃO: Esta ação irá DELETAR TODOS os dados do banco de dados e cache!\n\nIsso inclui:\n- Todas as apostas\n- Todas as estatísticas\n- Todo o histórico de saldo\n- Arquivos de cache\n\nEsta ação NÃO PODE ser desfeita!\n\nDeseja continuar?')) {
+                return;
+            }
+
+            if (!confirm('⚠️ CONFIRMAÇÃO FINAL\n\nVocê tem certeza que deseja limpar TODOS os dados?\n\nEsta ação é IRREVERSÍVEL!')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/database/clear', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.success) {
+                    const details = result.details || {};
+                    const message = `✅ Dados limpos com sucesso!\n\n` +
+                        `📊 Removidos:\n` +
+                        `- ${details.bets_deleted || 0} apostas\n` +
+                        `- ${details.stats_deleted || 0} estatísticas\n` +
+                        `- ${details.balance_deleted || 0} saldos\n` +
+                        `- ${details.cache_deleted || 0} arquivos de cache\n\n` +
+                        `🔄 Atualizando dashboard...`;
+                    
+                    alert(message);
+                    // Atualizar dados após limpeza
+                    setTimeout(updateData, 1000);
+                } else {
+                    alert(`❌ Erro ao limpar dados: ${result.message || 'Erro desconhecido'}`);
+                }
+            } catch (error) {
+                alert(`❌ Erro ao limpar dados: ${error.message}`);
+            }
+        }
+
+        function applyStrategyStyle(btnId, isActive) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            btn.classList.toggle('active', isActive);
+        }
+
+        async function loadStrategyStatus() {
+            try {
+                const [sr, cr] = await Promise.all([
+                    fetch('/api/strategy/status'),
+                    fetch('/api/config'),
+                ]);
+                const sd = await sr.json();
+                const cd = await cr.json();
+                if (sd.success) applyStrategyStyle('btn-over-05', sd.over_05);
+                if (cd.success && cd.config) {
+                    applyStrategyStyle('btn-under-hedge', cd.config.under_hedge_enabled);
+                    applyStrategyStyle('btn-under-high-hedge', cd.config.under_high_hedge_enabled);
+                }
+            } catch(e) { console.error('Erro ao carregar status das estratégias:', e); }
+        }
+
+        async function toggleStrategy(strategy) {
+            // Hedge toggle: uses /api/config directly
+            if (strategy === 'under_hedge') {
+                const btn = document.getElementById('btn-under-hedge');
+                const origHtml = btn.innerHTML;
+                btn.disabled = true;
+                btn.textContent = 'Aguarde...';
+                try {
+                    const rc = await fetch('/api/config');
+                    const dc = await rc.json();
+                    const curr = dc.success ? (dc.config.under_hedge_enabled || false) : false;
+                    const next = !curr;
+                    const r = await fetch('/api/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            under_hedge_enabled: next,
+                            under_hedge_stake: parseFloat(document.getElementById('config-under-hedge-stake').value) || 15,
+                        })
+                    });
+                    const d = await r.json();
+                    if (d.success) {
+                        await loadStrategyStatus();
+                        showToast(`Hedge Under 1.5 ${next ? 'ativado' : 'desativado'}`);
+                    } else {
+                        alert(d.message || 'Erro ao alterar hedge');
+                        btn.innerHTML = origHtml;
+                    }
+                } catch(e) {
+                    alert('Erro: ' + e.message);
+                    btn.innerHTML = origHtml;
+                } finally {
+                    btn.disabled = false;
+                }
+                return;
+            }
+
+            // Under Alta toggle
+            if (strategy === 'under_high_hedge') {
+                const btn = document.getElementById('btn-under-high-hedge');
+                const origHtml = btn.innerHTML;
+                btn.disabled = true;
+                btn.textContent = 'Aguarde...';
+                try {
+                    const rc = await fetch('/api/config');
+                    const dc = await rc.json();
+                    const curr = dc.success ? (dc.config.under_high_hedge_enabled || false) : false;
+                    const next = !curr;
+                    const r = await fetch('/api/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            under_high_hedge_enabled: next,
+                            under_high_hedge_stake: parseFloat(document.getElementById('config-under-high-hedge-stake').value) || 15,
+                        })
+                    });
+                    const d = await r.json();
+                    if (d.success) {
+                        await loadStrategyStatus();
+                        showToast(`Under Alta 4.5/5.5/6.5 ${next ? 'ativada' : 'desativada'}`);
+                    } else {
+                        alert(d.message || 'Erro ao alterar Under Alta');
+                        btn.innerHTML = origHtml;
+                    }
+                } catch(e) {
+                    alert('Erro: ' + e.message);
+                    btn.innerHTML = origHtml;
+                } finally {
+                    btn.disabled = false;
+                }
+                return;
+            }
+
+            // over_05 toggle via strategy API
+            const btn = document.getElementById('btn-over-05');
+            const origHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.textContent = 'Aguarde...';
+
+            try {
+                const sr = await fetch('/api/strategy/status');
+                const sd = await sr.json();
+                const curr = sd.over_05 || false;
+                const next = !curr;
+
+                const r = await fetch('/api/strategy/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ strategy: 'over_05', enabled: next })
+                });
+                const d = await r.json();
+
+                if (d.success) {
+                    await loadStrategyStatus();
+                    showToast(`Over 0.5 Gols ${next ? 'ativada' : 'desativada'}`);
+                } else {
+                    alert(d.message || 'Erro ao alterar estratégia');
+                    btn.innerHTML = origHtml;
+                }
+            } catch(e) {
+                alert('Erro: ' + e.message);
+                btn.innerHTML = origHtml;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function showToast(msg) {
+            let t = document.getElementById('strategy-toast');
+            if (!t) {
+                t = document.createElement('div');
+                t.id = 'strategy-toast';
+                t.style.cssText = `position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);
+                    background:var(--card);color:var(--text);padding:1rem 2rem;border-radius:10px;
+                    border:1px solid var(--border);font-size:0.9rem;font-weight:600;z-index:9999;
+                    box-shadow:0 8px 24px rgba(0,0,0,0.4);transition:opacity 0.4s;`;
+                document.body.appendChild(t);
+            }
+            t.textContent = msg;
+            t.style.opacity = '1';
+            clearTimeout(t._timer);
+            t._timer = setTimeout(() => { t.style.opacity = '0'; }, 2500);
+        }
+        // ─────────────────────────────────────────────────────────────
+
+        // Carregar dados iniciais
+        updateData();
+        checkDockerAvailability();
+        loadStrategyStatus();
+        
+        // Verificar Docker a cada 30 segundos
+        setInterval(checkDockerAvailability, 30000);
+        // Atualizar status das estratégias a cada 15 segundos
+        setInterval(loadStrategyStatus, 15000);
+    </script>
+</body>
+</html>

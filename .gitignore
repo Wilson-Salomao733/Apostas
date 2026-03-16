@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Configurações sensíveis — NUNCA subir ao GitHub
+config.ini
+bot_config.ini
+session_token.txt
+
+# Certificados e chaves privadas
+certs/*.crt
+certs/*.key
+certs/*.pem
+certs/*.p12
+certs/*.csr
+!certs/.gitkeep
+
+# Arquivo de variáveis de ambiente
+.env
+
+# Histórico de apostas exportado da Betfair
+ExchangeBets_Settled*.csv
+*.csv
+
+# Relatórios
+RElatório/
+
+# Logs
+logs/
+*.log
+
+# Banco de dados
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak

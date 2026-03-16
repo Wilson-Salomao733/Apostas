@@ -1,0 +1,19 @@
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = ssl_client
+prompt = no
+
+[req_distinguished_name]
+C = GB
+ST = London
+L = London
+O = Betfair API Client
+OU = Security Team
+CN = Betfair API-NG Certificate
+emailAddress = api@betfair.com
+
+[ssl_client]
+basicConstraints = CA:FALSE
+nsCertType = client
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth

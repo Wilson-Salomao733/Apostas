@@ -1,0 +1,91 @@
+[bot]
+stake = 15
+max_bets_per_sport = 20
+check_interval = 30
+
+[soccer]
+enabled = true
+entry_min_minute = 1
+entry_max_minute = 25
+take_profit_pct = 1.5
+stop_loss_pct = 10.0
+timeout_minutes = 10
+over_05_odds_min = 1.15
+over_05_odds_max = 1.5
+min_odd = 2.15
+max_odd =
+under_25_min_odd = 1.35
+under_25_max_odd =
+check_time_window = true
+pre_match_enabled = true
+under_hedge_enabled = true
+under_hedge_stake = 15
+under_hedge_min_minute = 73
+cs00_fallback_min_minute = 88
+under_15_emergency_min_minute = 93
+stop_loss_lay_enabled = true
+stop_loss_lay_threshold = 2
+require_game_time_to_bet = true
+under_high_hedge_enabled = true
+under_high_hedge_stake = 15
+under_high_hedge_min_odd = 1.15
+under_high_hedge_min_odd_first_entry = 1.08
+under_high_hedge_trigger_minute = 1
+under_high_hedge_end_minute = 88
+under_high_hedge_max_entries = 2
+under_high_hedge_second_entry_minute = 60
+partial_stop_loss_lay_enabled = false
+partial_stop_loss_lay_min_minute = 85
+partial_stop_loss_lay_stake_pct = 0.5
+
+[hockey]
+enabled = false
+entry_min_minute = 3
+entry_max_minute = 5
+take_profit_pct = 2.0
+stop_loss_pct = 15.0
+timeout_minutes = 5
+
+[tennis]
+enabled = false
+favorite_max_odd = 1.40
+take_profit_pct = 3.0
+stop_loss_pct = 10.0
+
+[pre_match_trading]
+enabled = false
+stake = 15
+take_profit_pct = 6.0
+stop_loss_pct = 4.0
+min_odd = 1.50
+max_odd = 3.50
+min_hours_before_start = 2
+max_hours_before_start = 48
+min_market_volume = 1000
+close_before_start_minutes = 30
+market_types = MATCH_ODDS
+
+[lay_draw]
+enabled = false
+min_odd = 2.8
+max_odd = 3.5
+take_profit_odd = 4.5
+stop_loss_odd = 2.2
+entry_max_minute = 15
+exit_max_minute = 45
+enable_stop_loss = true
+stop_loss_min_loss_brl = 5.0
+enable_timeout_exit = false
+stake_pct = 2.0
+max_concurrent_bets = 8
+min_market_volume = 5000
+daily_loss_limit_pct = 0
+total_loss_limit_pct = 20.0
+commission = 5.0
+
+[telegram]
+enabled = true
+# Obtenha o token criando um bot pelo @BotFather no Telegram
+bot_token = SEU_TOKEN_AQUI
+# Obtenha seu chat_id usando @userinfobot no Telegram
+chat_id = SEU_CHAT_ID_AQUI
