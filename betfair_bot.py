@@ -163,6 +163,8 @@ class BetfairTradingBot:
         }
         
         self.lay_draw_config = self._build_lay_draw_config()
+        self.under_filter_config = self._load_under_filter_config()
+        self._under_filter_last_run: Optional[datetime] = None
         
         # Gestão de banca para Lay Draw
         self.lay_draw_daily_start_balance: Optional[float] = None
@@ -299,6 +301,7 @@ class BetfairTradingBot:
                 logger.info(f"🔄 Configuração atualizada: Verificação de Tempo → {status}")
                 
             self.lay_draw_config = self._build_lay_draw_config()
+            self.under_filter_config = self._load_under_filter_config()
                 
         except Exception as e:
             logger.warning(f"Erro ao recarregar configurações: {e}")
@@ -324,6 +327,23 @@ class BetfairTradingBot:
             'enable_timeout_exit':  self.bot_config.getboolean('lay_draw', 'enable_timeout_exit', fallback=False),
             # Stop loss só dispara se o prejuízo for >= este valor (em R$). Ex.: 5 = só fecha se perder 5+ reais.
             'stop_loss_min_loss_brl': float(self.bot_config.get('lay_draw', 'stop_loss_min_loss_brl', fallback='5.0')),
+        }
+
+    def _load_under_filter_config(self) -> Dict:
+        """Lê configurações da estratégia Under Filter do config file."""
+        return {
+            'enabled':               self.bot_config.getboolean('under_filter', 'enabled', fallback=False),
+            'stake':                 float(self.bot_config.get('under_filter', 'stake', fallback='15.0')),
+            'over05_moderate_min':   float(self.bot_config.get('under_filter', 'over05_moderate_min', fallback='1.17')),
+            'over05_moderate_max':   float(self.bot_config.get('under_filter', 'over05_moderate_max', fallback='1.30')),
+            'over05_defensive_min':  float(self.bot_config.get('under_filter', 'over05_defensive_min', fallback='1.30')),
+            'over05_defensive_max':  float(self.bot_config.get('under_filter', 'over05_defensive_max', fallback='1.50')),
+            'over05_verydefensive_min': float(self.bot_config.get('under_filter', 'over05_verydefensive_min', fallback='1.50')),
+            'under_45_min_odd':      float(self.bot_config.get('under_filter', 'under_45_min_odd', fallback='1.08')),
+            'under_55_min_odd':      float(self.bot_config.get('under_filter', 'under_55_min_odd', fallback='1.04')),
+            'under_65_min_odd':      float(self.bot_config.get('under_filter', 'under_65_min_odd', fallback='1.03')),
+            'pre_match_enabled':     self.bot_config.getboolean('under_filter', 'pre_match_enabled', fallback=True),
+            'run_interval':          int(self.bot_config.get('under_filter', 'run_interval', fallback='60')),
         }
 
     def load_active_bets(self) -> Dict[str, ActiveBet]:
@@ -2876,6 +2896,271 @@ class BetfairTradingBot:
         else:
             logger.debug("Nenhum mercado de futebol foi verificado nesta iteração")
     
+    def process_under_filter_strategy(self):
+        """
+        Estratégia Under Filter: monitora todos os mercados Over 0.5 e,
+        baseado na odd do Over 0.5 como filtro, aposta no Under correspondente.
+
+        Regras calibradas pelos dados históricos (1.000 apostas):
+          - Over 0.5 entre 1.17 e 1.30  → Under 4.5  (win rate 92.9%, ROI +5.9%)
+          - Over 0.5 entre 1.30 e 1.50  → Under 5.5  (jogo defensivo)
+          - Over 0.5 acima de 1.50       → Under 6.5  (jogo muito defensivo)
+          - Over 0.5 abaixo de 1.17      → não apostar (jogo muito aberto)
+
+        Vantagem sobre Over 0.5: o Under X.5 também ganha nos jogos 0x0,
+        eliminando o principal risco da estratégia anterior.
+        """
+        config = self.under_filter_config
+        if not config['enabled']:
+            logger.debug("[Under Filter] Estratégia desabilitada")
+            return
+
+        # Controle de intervalo: só roda a cada run_interval segundos
+        run_interval = config.get('run_interval', 60)
+        now = datetime.now()
+        if self._under_filter_last_run is not None:
+            elapsed = (now - self._under_filter_last_run).total_seconds()
+            if elapsed < run_interval:
+                logger.debug(
+                    f"[Under Filter] Aguardando intervalo ({elapsed:.0f}s / {run_interval}s) — pulando ciclo"
+                )
+                return
+        self._under_filter_last_run = now
+
+        stake = config['stake']
+        logger.info(f"🎯 [Under Filter] Iniciando ciclo (intervalo: {run_interval}s)...")
+
+        # 1. Buscar todos os mercados OVER_UNDER_05 (ao vivo + pré-jogo)
+        all_markets = []
+        seen_market_ids = set()
+        try:
+            for inplay_flag in [True, False]:
+                if not inplay_flag and not config.get('pre_match_enabled', True):
+                    continue
+                result = self.api.list_market_catalogue(
+                    filter_dict={
+                        'eventTypeIds': ['1'],
+                        'marketTypeCodes': ['OVER_UNDER_05'],
+                        'inPlayOnly': inplay_flag,
+                    },
+                    market_projection=['MARKET_DESCRIPTION', 'RUNNER_DESCRIPTION', 'EVENT', 'MARKET_START_TIME'],
+                    max_results=150
+                ) or []
+                for m in result:
+                    mid = m.get('marketId')
+                    if mid and mid not in seen_market_ids:
+                        seen_market_ids.add(mid)
+                        m['_is_inplay'] = inplay_flag
+                        all_markets.append(m)
+        except Exception as e:
+            logger.warning(f"[Under Filter] Erro ao buscar mercados OVER_UNDER_05: {e}")
+            return
+
+        # Deduplicar por event_id (um evento pode ter vários mercados)
+        seen_events = set()
+        unique_markets = []
+        for m in all_markets:
+            eid = m.get('event', {}).get('id')
+            if eid and eid not in seen_events:
+                seen_events.add(eid)
+                unique_markets.append(m)
+
+        logger.info(f"[Under Filter] {len(unique_markets)} eventos únicos encontrados com mercado Over 0.5")
+
+        processed = 0
+        bets_placed = 0
+
+        for market in unique_markets[:30]:
+            event      = market.get('event', {})
+            event_id   = event.get('id')
+            event_name = event.get('name', 'N/A')
+            market_id  = market.get('marketId')
+            if not event_id or not market_id:
+                continue
+
+            # Verificar se já existe aposta ativa desta estratégia no evento
+            already_active = False
+            try:
+                db_bets = self.db.get_active_bets()
+                for db_bet in db_bets:
+                    if (str(db_bet.get('event_id')) == str(event_id)
+                            and db_bet.get('status') == 'ACTIVE'
+                            and 'under filter' in (db_bet.get('strategy') or '').lower()):
+                        already_active = True
+                        break
+            except Exception:
+                pass
+            if already_active:
+                logger.debug(f"[Under Filter] {event_name}: já tem aposta ativa — pulando")
+                continue
+
+            # 2. Obter odds do Over 0.5 neste mercado
+            try:
+                books = self.api.list_market_book(
+                    market_ids=[market_id],
+                    price_projection={'priceData': ['EX_BEST_OFFERS']}
+                ) or []
+            except Exception as e:
+                logger.debug(f"[Under Filter] Erro ao buscar book de {event_name}: {e}")
+                continue
+
+            if not books or books[0].get('status') != 'OPEN':
+                continue
+
+            runners       = books[0].get('runners', [])
+            over05_runner = self._get_over_05_runner(runners)
+            if not over05_runner:
+                logger.debug(f"[Under Filter] {event_name}: runner Over 0.5 não encontrado")
+                continue
+
+            avail_back = over05_runner.get('ex', {}).get('availableToBack', [])
+            if not avail_back:
+                continue
+            over05_odds = avail_back[0].get('price', 0)
+            if over05_odds < 1.01:
+                continue
+
+            processed += 1
+
+            # 3. Decidir qual Under apostar baseado na odd do Over 0.5
+            mod_min  = config['over05_moderate_min']
+            mod_max  = config['over05_moderate_max']
+            def_min  = config['over05_defensive_min']
+            def_max  = config['over05_defensive_max']
+            vdef_min = config['over05_verydefensive_min']
+
+            if mod_min <= over05_odds < mod_max:
+                target_under = 4.5
+                target_code  = 'OVER_UNDER_45'
+                min_odd      = config['under_45_min_odd']
+                zone         = "moderada"
+            elif def_min <= over05_odds < def_max:
+                target_under = 5.5
+                target_code  = 'OVER_UNDER_55'
+                min_odd      = config['under_55_min_odd']
+                zone         = "defensiva"
+            elif over05_odds >= vdef_min:
+                target_under = 6.5
+                target_code  = 'OVER_UNDER_65'
+                min_odd      = config['under_65_min_odd']
+                zone         = "muito defensiva"
+            else:
+                logger.debug(
+                    f"[Under Filter] {event_name}: Over 0.5 @ {over05_odds:.2f} "
+                    f"— abaixo de {mod_min} (jogo muito aberto), pulando"
+                )
+                continue
+
+            logger.info(
+                f"[Under Filter] {event_name}: Over 0.5 @ {over05_odds:.2f} "
+                f"→ zona {zone} → buscando Under {target_under}"
+            )
+
+            # 4. Localizar o mercado Under X.5 para este evento
+            under_market = self._find_under_market(
+                event_id=event_id,
+                under_type_codes=[target_code],
+                goals_map={target_code: target_under},
+                hedge_min_odd=min_odd,
+                hedge_max_odd=None,
+                hedge_stake=stake,
+                label=f"Under Filter {target_under}",
+            )
+
+            if not under_market:
+                logger.info(
+                    f"[Under Filter] {event_name}: mercado Under {target_under} "
+                    f"não encontrado ou odd abaixo do mínimo ({min_odd})"
+                )
+                continue
+
+            under_price        = under_market['price']
+            under_market_id    = under_market['market_id']
+            under_selection_id = under_market['selection_id']
+
+            logger.info(
+                f"[Under Filter] ✅ {event_name}: Under {target_under} @ {under_price:.2f} "
+                f"(Over 0.5 @ {over05_odds:.2f})"
+            )
+
+            # 5. Colocar aposta BACK no Under X.5
+            bet_id = self.place_back_bet(
+                market_id=under_market_id,
+                selection_id=under_selection_id,
+                price=under_price,
+                stake=stake
+            )
+
+            if bet_id:
+                strategy_name = f"Under Filter {target_under} (Over0.5@{over05_odds:.2f})"
+                entry_time    = datetime.now()
+                bet = ActiveBet(
+                    bet_id=bet_id,
+                    market_id=under_market_id,
+                    event_id=event_id,
+                    sport=SportType.SOCCER,
+                    strategy=strategy_name,
+                    side="BACK",
+                    selection_id=str(under_selection_id),
+                    entry_price=under_price,
+                    entry_time=entry_time,
+                    stake=stake,
+                    liability=0.0,
+                    take_profit_pct=0.0,
+                    stop_loss_pct=0.0,
+                )
+                self.active_bets[bet_id] = bet
+                self.stats['total_bets']   += 1
+                self.stats['soccer_bets']  += 1
+
+                self.db.insert_bet({
+                    'bet_id':          bet_id,
+                    'market_id':       under_market_id,
+                    'event_id':        event_id,
+                    'event_name':      event_name,
+                    'sport':           SportType.SOCCER.name,
+                    'strategy':        strategy_name,
+                    'side':            "BACK",
+                    'selection_id':    str(under_selection_id),
+                    'entry_price':     under_price,
+                    'entry_time':      entry_time.isoformat(),
+                    'stake':           stake,
+                    'liability':       0.0,
+                    'take_profit_pct': 0.0,
+                    'stop_loss_pct':   0.0,
+                    'status':          'ACTIVE',
+                })
+
+                bets_placed += 1
+                logger.info(
+                    f"✓✓✓ NOVA APOSTA [Under Filter]: {event_name} "
+                    f"— Under {target_under} @ {under_price:.2f} "
+                    f"— Stake R$ {stake:.2f}"
+                )
+
+                if self.telegram and self.telegram.enabled:
+                    try:
+                        balance  = self.get_account_balance()
+                        bet_info = {
+                            'bet_id':       bet_id,
+                            'event_name':   event_name,
+                            'sport':        SportType.SOCCER.name,
+                            'strategy':     strategy_name,
+                            'side':         "BACK",
+                            'entry_price':  under_price,
+                            'stake':        stake,
+                            'liability':    0.0,
+                        }
+                        self.telegram.notify_new_bet(bet_info, balance)
+                    except Exception as e:
+                        logger.warning(f"[Under Filter] Erro ao enviar Telegram: {e}")
+            else:
+                logger.warning(f"[Under Filter] Falha ao colocar aposta para {event_name}")
+
+        logger.info(
+            f"[Under Filter] Ciclo concluído: {processed} avaliados, {bets_placed} apostas colocadas"
+        )
+
     def check_hockey_entry_conditions(self, market_id: str) -> Optional[Dict]:
         """Verifica condições de entrada para hóquei"""
         try:
@@ -4206,6 +4491,9 @@ class BetfairTradingBot:
                         self.process_zero_zero_protection()
                 else:
                     logger.debug("Estratégia de futebol desabilitada no config")
+
+                # Estratégia Under Filter (Over 0.5 como filtro → Under 4.5/5.5/6.5)
+                self.process_under_filter_strategy()
 
                 # Lay Draw
                 if self.lay_draw_config['enabled']:
