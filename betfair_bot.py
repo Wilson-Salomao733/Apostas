@@ -339,10 +339,11 @@ class BetfairTradingBot:
             'over05_defensive_min':  float(self.bot_config.get('under_filter', 'over05_defensive_min', fallback='1.30')),
             'over05_defensive_max':  float(self.bot_config.get('under_filter', 'over05_defensive_max', fallback='1.50')),
             'over05_verydefensive_min': float(self.bot_config.get('under_filter', 'over05_verydefensive_min', fallback='1.50')),
-            'under_45_min_odd':      float(self.bot_config.get('under_filter', 'under_45_min_odd', fallback='1.08')),
-            'under_55_min_odd':      float(self.bot_config.get('under_filter', 'under_55_min_odd', fallback='1.04')),
+            'under_45_min_odd':      float(self.bot_config.get('under_filter', 'under_45_min_odd', fallback='1.15')),
+            'under_35_min_odd':      float(self.bot_config.get('under_filter', 'under_35_min_odd', fallback='1.15')),
+            'under_55_min_odd':      float(self.bot_config.get('under_filter', 'under_55_min_odd', fallback='1.15')),
             'under_65_min_odd':      float(self.bot_config.get('under_filter', 'under_65_min_odd', fallback='1.03')),
-            'pre_match_enabled':     self.bot_config.getboolean('under_filter', 'pre_match_enabled', fallback=True),
+            'pre_match_enabled':     self.bot_config.getboolean('under_filter', 'pre_match_enabled', fallback=False),
             'run_interval':          int(self.bot_config.get('under_filter', 'run_interval', fallback='60')),
         }
 
@@ -2898,17 +2899,15 @@ class BetfairTradingBot:
     
     def process_under_filter_strategy(self):
         """
-        Estratégia Under Filter: monitora todos os mercados Over 0.5 e,
-        baseado na odd do Over 0.5 como filtro, aposta no Under correspondente.
+        Estratégia Under Filter: monitora mercados Over 0.5 ao vivo e,
+        quando a odd está alta o suficiente, procura Under 4.5 / 3.5 / 5.5.
 
-        Regras calibradas pelos dados históricos (1.000 apostas):
-          - Over 0.5 entre 1.17 e 1.30  → Under 4.5  (win rate 92.9%, ROI +5.9%)
-          - Over 0.5 entre 1.30 e 1.50  → Under 5.5  (jogo defensivo)
-          - Over 0.5 acima de 1.50       → Under 6.5  (jogo muito defensivo)
+        Regras atuais:
+          - Pré-jogo: só aceita Under 4.5
+          - Ao vivo: exige placar confirmado em 0-0
           - Over 0.5 abaixo de 1.17      → não apostar (jogo muito aberto)
-
-        Vantagem sobre Over 0.5: o Under X.5 também ganha nos jogos 0x0,
-        eliminando o principal risco da estratégia anterior.
+          - Prioridade ao vivo           → Under 4.5, depois 3.5, depois 5.5
+          - Odd mínima do Under          → 1.15 para evitar entradas improváveis demais
         """
         config = self.under_filter_config
         if not config['enabled']:
@@ -2930,7 +2929,7 @@ class BetfairTradingBot:
         stake = config['stake']
         logger.info(f"🎯 [Under Filter] Iniciando ciclo (intervalo: {run_interval}s)...")
 
-        # 1. Buscar todos os mercados OVER_UNDER_05 (ao vivo + pré-jogo)
+        # 1. Buscar todos os mercados OVER_UNDER_05 (prioridade total para ao vivo)
         all_markets = []
         seen_market_ids = set()
         try:
@@ -2978,6 +2977,30 @@ class BetfairTradingBot:
             if not event_id or not market_id:
                 continue
 
+            is_inplay = market.get('_is_inplay', False)
+            if is_inplay:
+                score = self.get_match_score(market_id)
+                if not score:
+                    logger.debug(f"[Under Filter] {event_name}: placar indisponível — precisa confirmar 0-0")
+                    continue
+
+                try:
+                    home_score = int(score.get('home', 0))
+                    away_score = int(score.get('away', 0))
+                except (TypeError, ValueError):
+                    logger.debug(
+                        f"[Under Filter] {event_name}: placar inválido "
+                        f"{score.get('home')}-{score.get('away')} — pulando"
+                    )
+                    continue
+
+                if home_score != 0 or away_score != 0:
+                    logger.debug(
+                        f"[Under Filter] {event_name}: placar {home_score}-{away_score} — "
+                        "ao vivo a estratégia aceita apenas 0-0"
+                    )
+                    continue
+
             # Verificar se já existe aposta ativa desta estratégia no evento
             already_active = False
             try:
@@ -2994,7 +3017,23 @@ class BetfairTradingBot:
                 logger.debug(f"[Under Filter] {event_name}: já tem aposta ativa — pulando")
                 continue
 
-            # 2. Obter odds do Over 0.5 neste mercado
+            # 2. Identificar o runner Over 0.5 pelo catálogo (tem runnerName)
+            #    e buscar as odds no book (tem dados de exchange)
+            catalogue_runners = market.get('runners', [])
+            over05_catalogue = self._get_over_05_runner(catalogue_runners)
+
+            # Fallback: em mercados de 2 runners, o Over é o de menor selectionId
+            if not over05_catalogue and len(catalogue_runners) == 2:
+                ids = [(cr.get('selectionId') or cr.get('id'), cr) for cr in catalogue_runners]
+                ids.sort(key=lambda x: int(x[0]) if x[0] else 999999)
+                over05_catalogue = ids[0][1]
+
+            if not over05_catalogue:
+                logger.debug(f"[Under Filter] {event_name}: runner Over 0.5 não encontrado no catálogo")
+                continue
+
+            over05_selection_id = over05_catalogue.get('selectionId') or over05_catalogue.get('id')
+
             try:
                 books = self.api.list_market_book(
                     market_ids=[market_id],
@@ -3007,13 +3046,23 @@ class BetfairTradingBot:
             if not books or books[0].get('status') != 'OPEN':
                 continue
 
-            runners       = books[0].get('runners', [])
-            over05_runner = self._get_over_05_runner(runners)
-            if not over05_runner:
-                logger.debug(f"[Under Filter] {event_name}: runner Over 0.5 não encontrado")
+            # Encontrar o runner pelo selectionId no book
+            book_runners = books[0].get('runners', [])
+            over05_book_runner = None
+            for br in book_runners:
+                bid = br.get('selectionId') or br.get('id')
+                try:
+                    if int(bid) == int(over05_selection_id):
+                        over05_book_runner = br
+                        break
+                except (ValueError, TypeError):
+                    continue
+
+            if not over05_book_runner:
+                logger.debug(f"[Under Filter] {event_name}: runner Over 0.5 não encontrado no book")
                 continue
 
-            avail_back = over05_runner.get('ex', {}).get('availableToBack', [])
+            avail_back = over05_book_runner.get('ex', {}).get('availableToBack', [])
             if not avail_back:
                 continue
             over05_odds = avail_back[0].get('price', 0)
@@ -3022,7 +3071,7 @@ class BetfairTradingBot:
 
             processed += 1
 
-            # 3. Decidir qual Under apostar baseado na odd do Over 0.5
+            # 3. Montar a prioridade de mercados Under baseada na odd do Over 0.5
             mod_min  = config['over05_moderate_min']
             mod_max  = config['over05_moderate_max']
             def_min  = config['over05_defensive_min']
@@ -3030,19 +3079,10 @@ class BetfairTradingBot:
             vdef_min = config['over05_verydefensive_min']
 
             if mod_min <= over05_odds < mod_max:
-                target_under = 4.5
-                target_code  = 'OVER_UNDER_45'
-                min_odd      = config['under_45_min_odd']
                 zone         = "moderada"
             elif def_min <= over05_odds < def_max:
-                target_under = 5.5
-                target_code  = 'OVER_UNDER_55'
-                min_odd      = config['under_55_min_odd']
                 zone         = "defensiva"
             elif over05_odds >= vdef_min:
-                target_under = 6.5
-                target_code  = 'OVER_UNDER_65'
-                min_odd      = config['under_65_min_odd']
                 zone         = "muito defensiva"
             else:
                 logger.debug(
@@ -3051,26 +3091,49 @@ class BetfairTradingBot:
                 )
                 continue
 
+            if is_inplay:
+                candidate_markets = [
+                    (4.5, 'OVER_UNDER_45', config['under_45_min_odd']),
+                    (3.5, 'OVER_UNDER_35', config['under_35_min_odd']),
+                ]
+                if over05_odds >= def_min:
+                    candidate_markets.append((5.5, 'OVER_UNDER_55', config['under_55_min_odd']))
+                priority_label = "Under 4.5 > 3.5 > 5.5"
+            else:
+                candidate_markets = [
+                    (4.5, 'OVER_UNDER_45', config['under_45_min_odd']),
+                ]
+                priority_label = "Under 4.5 apenas (pré-jogo)"
+
             logger.info(
                 f"[Under Filter] {event_name}: Over 0.5 @ {over05_odds:.2f} "
-                f"→ zona {zone} → buscando Under {target_under}"
+                f"→ zona {zone} → prioridade {priority_label}"
             )
 
-            # 4. Localizar o mercado Under X.5 para este evento
-            under_market = self._find_under_market(
-                event_id=event_id,
-                under_type_codes=[target_code],
-                goals_map={target_code: target_under},
-                hedge_min_odd=min_odd,
-                hedge_max_odd=None,
-                hedge_stake=stake,
-                label=f"Under Filter {target_under}",
-            )
+            # 4. Localizar o primeiro mercado elegível respeitando a prioridade configurada
+            under_market = None
+            target_under = None
+            for candidate_under, candidate_code, candidate_min_odd in candidate_markets:
+                logger.info(
+                    f"[Under Filter] {event_name}: tentando Under {candidate_under} "
+                    f"(odd mínima {candidate_min_odd:.2f})"
+                )
+                under_market = self._find_under_market(
+                    event_id=event_id,
+                    under_type_codes=[candidate_code],
+                    goals_map={candidate_code: candidate_under},
+                    hedge_min_odd=candidate_min_odd,
+                    hedge_max_odd=None,
+                    hedge_stake=stake,
+                    label=f"Under Filter {candidate_under}",
+                )
+                if under_market:
+                    target_under = candidate_under
+                    break
 
             if not under_market:
                 logger.info(
-                    f"[Under Filter] {event_name}: mercado Under {target_under} "
-                    f"não encontrado ou odd abaixo do mínimo ({min_odd})"
+                    f"[Under Filter] {event_name}: nenhum mercado Under elegível encontrado"
                 )
                 continue
 
