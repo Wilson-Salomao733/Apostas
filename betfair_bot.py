@@ -96,6 +96,9 @@ class BetfairTradingBot:
             'enabled': self.bot_config.getboolean('soccer', 'enabled', fallback=True),
             'entry_min_minute': int(self.bot_config.get('soccer', 'entry_min_minute', fallback='1')),
             'entry_max_minute': int(self.bot_config.get('soccer', 'entry_max_minute', fallback='45')),
+            'entry_goal_line': float(self.bot_config.get('soccer', 'entry_goal_line', fallback='1.5')),
+            'entry_odds_min': float(self.bot_config.get('soccer', 'entry_odds_min', fallback='1.80')),
+            'entry_odds_max': float(self.bot_config.get('soccer', 'entry_odds_max', fallback='2.20')),
             'take_profit_pct': float(self.bot_config.get('soccer', 'take_profit_pct', fallback='1.5')),
             'stop_loss_pct': float(self.bot_config.get('soccer', 'stop_loss_pct', fallback='10.0')),
             'timeout_minutes': int(self.bot_config.get('soccer', 'timeout_minutes', fallback='10')),
@@ -137,7 +140,9 @@ class BetfairTradingBot:
         
         self.tennis_config = {
             'enabled': self.bot_config.getboolean('tennis', 'enabled', fallback=True),
-            'favorite_max_odd': float(self.bot_config.get('tennis', 'favorite_max_odd', fallback='1.40')),
+            'entry_min_odd': float(self.bot_config.get('tennis', 'entry_min_odd', fallback='1.80')),
+            'entry_max_odd': float(self.bot_config.get('tennis', 'entry_max_odd', fallback='2.20')),
+            'max_concurrent_bets': int(self.bot_config.get('tennis', 'max_concurrent_bets', fallback='7')),
             'take_profit_pct': float(self.bot_config.get('tennis', 'take_profit_pct', fallback='3.0')),
             'stop_loss_pct': float(self.bot_config.get('tennis', 'stop_loss_pct', fallback='10.0')),
         }
@@ -243,6 +248,9 @@ class BetfairTradingBot:
             self.soccer_config['enabled'] = self.bot_config.getboolean('soccer', 'enabled', fallback=True)
             self.soccer_config['entry_min_minute'] = int(self.bot_config.get('soccer', 'entry_min_minute', fallback='1'))
             self.soccer_config['entry_max_minute'] = int(self.bot_config.get('soccer', 'entry_max_minute', fallback='45'))
+            self.soccer_config['entry_goal_line'] = float(self.bot_config.get('soccer', 'entry_goal_line', fallback='1.5'))
+            self.soccer_config['entry_odds_min'] = float(self.bot_config.get('soccer', 'entry_odds_min', fallback='1.80'))
+            self.soccer_config['entry_odds_max'] = float(self.bot_config.get('soccer', 'entry_odds_max', fallback='2.20'))
             self.soccer_config['take_profit_pct'] = float(self.bot_config.get('soccer', 'take_profit_pct', fallback='1.5'))
             self.soccer_config['stop_loss_pct'] = float(self.bot_config.get('soccer', 'stop_loss_pct', fallback='10.0'))
             self.soccer_config['timeout_minutes'] = int(self.bot_config.get('soccer', 'timeout_minutes', fallback='10'))
@@ -269,6 +277,13 @@ class BetfairTradingBot:
             self.soccer_config['under_high_hedge_end_minute'] = int(self.bot_config.get('soccer', 'under_high_hedge_end_minute', fallback='88'))
             self.soccer_config['under_high_hedge_max_entries'] = int(self.bot_config.get('soccer', 'under_high_hedge_max_entries', fallback='2'))
             self.soccer_config['under_high_hedge_second_entry_minute'] = int(self.bot_config.get('soccer', 'under_high_hedge_second_entry_minute', fallback='60'))
+
+            self.tennis_config['enabled'] = self.bot_config.getboolean('tennis', 'enabled', fallback=True)
+            self.tennis_config['entry_min_odd'] = float(self.bot_config.get('tennis', 'entry_min_odd', fallback='1.80'))
+            self.tennis_config['entry_max_odd'] = float(self.bot_config.get('tennis', 'entry_max_odd', fallback='2.20'))
+            self.tennis_config['max_concurrent_bets'] = int(self.bot_config.get('tennis', 'max_concurrent_bets', fallback='7'))
+            self.tennis_config['take_profit_pct'] = float(self.bot_config.get('tennis', 'take_profit_pct', fallback='3.0'))
+            self.tennis_config['stop_loss_pct'] = float(self.bot_config.get('tennis', 'stop_loss_pct', fallback='10.0'))
             
             # Log apenas se houver mudanças
             if old_stake != self.stake:
@@ -370,18 +385,34 @@ class BetfairTradingBot:
             variations.extend([f"{whole_part}½", f"{whole_part} ½"])
         return variations
 
-    def _get_over_05_runner(self, runners):
-        """Encontra o runner Over 0.5 Goals (não Under!). Over 0.5 = odd baixa (1.01-1.50)."""
+    def _market_type_code_for_goal_line(self, goals_val: float) -> str:
+        mapping = {
+            0.5: 'OVER_UNDER_05',
+            1.5: 'OVER_UNDER_15',
+            2.5: 'OVER_UNDER_25',
+            3.5: 'OVER_UNDER_35',
+            4.5: 'OVER_UNDER_45',
+            5.5: 'OVER_UNDER_55',
+            6.5: 'OVER_UNDER_65',
+        }
+        return mapping.get(float(goals_val), 'OVER_UNDER_15')
+
+    def _get_over_runner(self, runners, goals_val=0.5):
+        """Encontra o runner Over X.5 Goals (não Under)."""
         for r in runners or []:
             runner_name = (r.get("runnerName") or "").upper()
             if "UNDER" in runner_name or "ABAIXO" in runner_name:
                 continue
             if "OVER" not in runner_name and "ACIMA" not in runner_name:
                 continue
-            for v in self._create_search_variations_over_05(0.5):
+            for v in self._create_search_variations_over_05(goals_val):
                 if v.upper() in runner_name or v in runner_name:
                     return r
         return None
+
+    def _get_over_05_runner(self, runners):
+        """Encontra o runner Over 0.5 Goals (não Under!). Over 0.5 = odd baixa (1.01-1.50)."""
+        return self._get_over_runner(runners, 0.5)
 
     def _find_under_market(
         self,
@@ -523,16 +554,10 @@ class BetfairTradingBot:
             return None
 
     def find_best_under_market(self, event_id: str, min_odd_override: Optional[float] = None) -> Optional[Dict]:
-        """Encontra o mercado Under 1.5 disponível para um evento."""
-        return self._find_under_market(
-            event_id=event_id,
-            under_type_codes=['OVER_UNDER_15'],
-            goals_map={'OVER_UNDER_15': 1.5},
-            hedge_min_odd=min_odd_override if min_odd_override is not None else self.soccer_config.get('min_odd', 2.15),
-            hedge_max_odd=self.soccer_config.get('max_odd', None),
-            hedge_stake=self.soccer_config.get('under_hedge_stake', self.stake),
-            label='Hedge Under 1.5',
-        )
+        """Encontra o mercado Under 1.5 (aposentado)."""
+        # Estratégia Under 1.5 foi retirada; nunca mais retornamos mercados para ela.
+        logger.info("🛑 find_best_under_market: Under 1.5 aposentado — retornando None.")
+        return None
 
     def find_under_25_market(self, event_id: str, min_odd_override: Optional[float] = None) -> Optional[Dict]:
         """Encontra o mercado Under 2.5 disponível para um evento."""
@@ -683,10 +708,11 @@ class BetfairTradingBot:
             return None
 
     def find_live_soccer_matches(self) -> List[Dict]:
-        """Encontra partidas com mercado Over/Under 0.5 Goals. Estratégia: BACK Over 0.5 (ganha quando sai 1 gol)."""
+        """Encontra partidas com mercado Over/Under configurado para a estratégia de futebol."""
         try:
-            market_type_codes = ['OVER_UNDER_05']
-            logger.info("🔍 Buscando Over 0.5 Gols (in-play + pré-live)...")
+            goal_line = self.soccer_config.get('entry_goal_line', 1.5)
+            market_type_codes = [self._market_type_code_for_goal_line(goal_line)]
+            logger.info("🔍 Buscando Over %.1f Gols (in-play + pré-live)...", goal_line)
             logger.info("📋 Market Type Codes: %s", market_type_codes)
             
             pre_match_enabled = self.soccer_config.get('pre_match_enabled', True)
@@ -695,7 +721,7 @@ class BetfairTradingBot:
             markets_inplay = []
             markets_upcoming = []
             
-            # Buscar in-play e pré-live (Over 0.5 disponível em ambos)
+            # Buscar in-play e pré-live
             try:
                 markets_inplay = self.api.list_market_catalogue(
                     filter_dict={
@@ -734,7 +760,7 @@ class BetfairTradingBot:
                     m['_is_inplay'] = False
                     markets.append(m)
             
-            logger.info("📊 Total mercados Over/Under 0.5: %d in-play + %d pré-live", len(markets_inplay), len(markets_upcoming))
+            logger.info("📊 Total mercados Over/Under %.1f: %d in-play + %d pré-live", goal_line, len(markets_inplay), len(markets_upcoming))
             
             valid_matches = []
             markets_filtered = 0
@@ -751,10 +777,10 @@ class BetfairTradingBot:
                     markets_filtered += 1
                     continue
                 
-                over_runner = self._get_over_05_runner(market.get('runners', []))
+                over_runner = self._get_over_runner(market.get('runners', []), goal_line)
                 if not over_runner:
                     markets_filtered += 1
-                    logger.debug("  ❌ '%s' - runner Over 0.5 não encontrado - pulando", market_name)
+                    logger.debug("  ❌ '%s' - runner Over %.1f não encontrado - pulando", market_name, goal_line)
                     continue
                 
                 runner_id = over_runner.get('selectionId') or over_runner.get('id') or over_runner.get('runnerId')
@@ -771,21 +797,21 @@ class BetfairTradingBot:
                 seen_events.add(event_id)
                 is_pre_match = not market.get('_is_inplay', False)
                 market_start_time = market.get('marketStartTime')
-                logger.info("  ✓ '%s' → Over 0.5 para %s | startTime: %s", market_name, event_name, market_start_time or 'N/D')
+                logger.info("  ✓ '%s' → Over %.1f para %s | startTime: %s", market_name, goal_line, event_name, market_start_time or 'N/D')
                 valid_matches.append({
                     'market_id': market_id,
                     'event_id': event_id,
                     'event_name': event_name,
                     'market': market,
-                    'over_05_runner_id': runner_id,
-                    'over_05_runner_name': over_runner.get('runnerName', ''),
+                    'entry_runner_id': runner_id,
+                    'entry_runner_name': over_runner.get('runnerName', ''),
                     'is_pre_match': is_pre_match,
                     'market_start_time': market_start_time,
                 })
             
-            logger.info("📊 Resumo: %d mercados | %d filtrados | %d candidatos Over 0.5", len(markets), markets_filtered, len(valid_matches))
+            logger.info("📊 Resumo: %d mercados | %d filtrados | %d candidatos Over %.1f", len(markets), markets_filtered, len(valid_matches), goal_line)
             if not valid_matches and markets:
-                logger.warning("⚠️ Nenhum jogo com Over 0.5 disponível no momento.")
+                logger.warning("⚠️ Nenhum jogo com Over %.1f disponível no momento.", goal_line)
             
             return valid_matches
         except Exception as e:
@@ -831,6 +857,8 @@ class BetfairTradingBot:
     def find_live_tennis_matches(self) -> List[Dict]:
         """Encontra partidas de tênis ao vivo"""
         try:
+            entry_min_odd = self.tennis_config.get('entry_min_odd', 1.80)
+            entry_max_odd = self.tennis_config.get('entry_max_odd', 2.20)
             filter_dict = {
                 'eventTypeIds': ['2'],  # Tennis
                 'marketTypeCodes': ['MATCH_ODDS'],
@@ -866,7 +894,7 @@ class BetfairTradingBot:
                                              key=lambda r: r.get('ex', {}).get('availableToBack', [{}])[0].get('price', 999))
                                 favorite_odd = favorite.get('ex', {}).get('availableToBack', [{}])[0].get('price', 999)
                                 
-                                if favorite_odd < self.tennis_config['favorite_max_odd']:
+                                if entry_min_odd <= favorite_odd <= entry_max_odd:
                                     valid_matches.append({
                                         'market_id': market_id,
                                         'event_id': event.get('id'),
@@ -1026,6 +1054,18 @@ class BetfairTradingBot:
         except Exception:
             return None
 
+    def _is_second_half(self, game_minute: Optional[int], score_status: str = '') -> bool:
+        """Considera 2º tempo pelo minuto, ou por status textual quando disponível."""
+        try:
+            if game_minute is not None and game_minute >= 46:
+                return True
+            status = (score_status or '').strip().lower()
+            if any(token in status for token in ('2h', '2nd', 'second half', 'segundo tempo', '2º')):
+                return True
+        except Exception:
+            pass
+        return False
+
     def get_live_match_minute(self, market_id: str, score: Optional[Dict[str, int]] = None) -> Optional[int]:
         """
         Usa primeiro o minuto oficial do feed de placar.
@@ -1041,9 +1081,10 @@ class BetfairTradingBot:
             pass
         return self.get_match_time(market_id)
     
-    def check_soccer_entry_conditions(self, market_id: str, over_05_runner_id: int = None, is_pre_match: bool = False) -> Optional[Dict]:
-        """Verifica condições de entrada para Over 0.5 Gols (BACK Over 0.5, odd 1.01-1.50, placar 0-0)."""
+    def check_soccer_entry_conditions(self, market_id: str, entry_runner_id: int = None, is_pre_match: bool = False) -> Optional[Dict]:
+        """Verifica condições de entrada para o mercado Over configurado no futebol."""
         try:
+            goal_line = self.soccer_config.get('entry_goal_line', 1.5)
             market_book = self.api.list_market_book(
                 market_ids=[market_id],
                 price_projection={'priceData': ['EX_BEST_OFFERS']}
@@ -1065,32 +1106,32 @@ class BetfairTradingBot:
                 logger.debug(f"Mercado {market_id}: Sem runners")
                 return None
             
-            # Encontrar runner Over 0.5 pelo ID ou pelo nome
+            # Encontrar runner Over da linha configurada pelo ID ou pelo nome
             over_runner = None
-            if over_05_runner_id:
+            if entry_runner_id:
                 for runner in runners:
                     runner_id = runner.get('id') or runner.get('selectionId')
                     try:
-                        if int(runner_id) == int(over_05_runner_id):
+                        if int(runner_id) == int(entry_runner_id):
                             over_runner = runner
-                            logger.debug(f"Mercado {market_id}: Runner Over 0.5 encontrado por ID: {over_05_runner_id}")
+                            logger.debug(f"Mercado {market_id}: Runner Over {goal_line:.1f} encontrado por ID: {entry_runner_id}")
                             break
                     except (ValueError, TypeError):
                         continue
             
             if not over_runner:
-                over_runner = self._get_over_05_runner(runners)
+                over_runner = self._get_over_runner(runners, goal_line)
                 if over_runner:
-                    logger.debug(f"Mercado {market_id}: Runner Over 0.5 encontrado por nome")
+                    logger.debug(f"Mercado {market_id}: Runner Over {goal_line:.1f} encontrado por nome")
             
             if not over_runner:
                 runner_info = [f"ID:{r.get('id') or r.get('selectionId')} Name:{r.get('runnerName', 'N/A')}" for r in runners]
-                logger.debug(f"Mercado {market_id}: Runner Over 0.5 não encontrado. Runners: {', '.join(runner_info)}")
+                logger.debug(f"Mercado {market_id}: Runner Over {goal_line:.1f} não encontrado. Runners: {', '.join(runner_info)}")
                 return None
             
             available_to_back = over_runner.get('ex', {}).get('availableToBack', [])
             if not available_to_back or len(available_to_back) == 0:
-                logger.debug(f"Mercado {market_id}: Sem odds disponíveis para BACK Over 0.5")
+                logger.debug(f"Mercado {market_id}: Sem odds disponíveis para BACK Over {goal_line:.1f}")
                 return None
             
             current_price = available_to_back[0].get('price', 0)
@@ -1100,13 +1141,13 @@ class BetfairTradingBot:
                 logger.debug(f"Mercado {market_id}: Preço inválido: {current_price}")
                 return None
             
-            min_odd = self.soccer_config.get('over_05_odds_min', 1.20)
-            max_odd = self.soccer_config.get('over_05_odds_max', 1.50)
+            min_odd = self.soccer_config.get('entry_odds_min', 1.80)
+            max_odd = self.soccer_config.get('entry_odds_max', 2.20)
             if current_price < min_odd:
-                logger.info(f"💰 Mercado {market_id}: Odd Over 0.5 muito baixa ({current_price:.2f} < {min_odd:.2f})")
+                logger.info(f"💰 Mercado {market_id}: Odd Over {goal_line:.1f} muito baixa ({current_price:.2f} < {min_odd:.2f})")
                 return None
             if current_price > max_odd:
-                logger.info(f"🚫 Mercado {market_id}: Odd Over 0.5 fora da faixa ({current_price:.2f} > {max_odd:.2f}) - recusado")
+                logger.info(f"🚫 Mercado {market_id}: Odd Over {goal_line:.1f} fora da faixa ({current_price:.2f} > {max_odd:.2f}) - recusado")
                 return None
             
             # Verificar liquidez suficiente
@@ -1249,27 +1290,38 @@ class BetfairTradingBot:
             else:
                 logger.debug(f"Mercado {market_id}: Verificação de tempo de jogo desabilitada - pulando verificação")
             
-            # Over 0.5: só apostar com placar 0-0 (se já tem gol, Over 0.5 já ganhou)
+            # Nova estratégia (sem Under 1.5):
+            # permitir entrada quando o jogo ainda não passou de 1 gol total (0-0, 0-1 ou 1-0).
+            # Se o IPS não fornecer placar, bloqueamos para não apostar com placar desconhecido.
             match_score = self.get_match_score(market_id)
-            if match_score:
-                home_score = match_score.get('home', 0)
-                away_score = match_score.get('away', 0)
-                try:
-                    h, a = int(home_score), int(away_score)
-                except (ValueError, TypeError):
-                    h, a = 0, 0
-                if h != 0 or a != 0:
-                    logger.info(f"⚽ Mercado {market_id}: Placar {home_score}-{away_score} - Over 0.5 exige 0-0, pulando")
-                    return None
-                logger.info(f"⚽ Mercado {market_id}: Placar 0-0 - OK para Over 0.5")
+            if not match_score:
+                logger.warning(f"⚽ Mercado {market_id}: placar indisponível (IPS) — bloqueando entrada")
+                return None
+
+            home_score = match_score.get('home', 0)
+            away_score = match_score.get('away', 0)
+            try:
+                h, a = int(home_score), int(away_score)
+            except (ValueError, TypeError):
+                logger.debug(f"Mercado {market_id}: placar inválido para conversão: {home_score}-{away_score}")
+                return None
+
+            total_so_far = h + a
+            if total_so_far > 1:
+                logger.info(
+                    f"⚽ Mercado {market_id}: Placar {h}-{a} (total {total_so_far}) — Over {goal_line:.1f} sem hedge, pulando"
+                )
+                return None
+
+            logger.info(f"⚽ Mercado {market_id}: Placar {h}-{a} (total {total_so_far}) — OK para Over {goal_line:.1f}")
             
             selection_id = over_runner.get('id') or over_runner.get('selectionId')
             if not selection_id:
-                logger.warning(f"Mercado {market_id}: Runner Over 0.5 sem ID válido")
+                logger.warning(f"Mercado {market_id}: Runner Over {goal_line:.1f} sem ID válido")
                 return None
             
             time_info = f" (Tempo: {match_time} min)" if match_time is not None else ""
-            logger.info(f"✓ Condições Over 0.5 atendidas para mercado {market_id}: Price {current_price}, Selection ID: {selection_id}{time_info}")
+            logger.info(f"✓ Condições Over {goal_line:.1f} atendidas para mercado {market_id}: Price {current_price}, Selection ID: {selection_id}{time_info}")
             return {
                 'runner': over_runner,
                 'price': current_price,
@@ -1948,8 +2000,10 @@ class BetfairTradingBot:
         O monitoramento continua durante TODO o jogo, mesmo após o Over 0.5 já ter
         ganho — o filtro de 25 minutos é só para entrar no Over 0.5, não para o hedge.
         """
-        if not self.soccer_config.get('under_hedge_enabled', False):
-            return
+        # RETIRADO: a estratégia de hedge Under 1.5 será substituída por uma nova lógica.
+        # Mantemos a função apenas por compatibilidade com chamadas antigas, mas não executa apostas.
+        logger.info("🛑 Hedge Under 1.5 aposentado — nenhuma aposta será executada.")
+        return
 
         try:
             # Buscar apostas de hoje (inclui ACTIVE, CLOSED_PROFIT, etc.)
@@ -1966,8 +2020,9 @@ class BetfairTradingBot:
         for b in today_bets:
             strat = (b.get('strategy') or '').lower()
 
-            # Precisa ser uma aposta Over 0.5 original
-            if 'over 0.5' not in strat and 'over_05' not in strat:
+            # Precisa ser uma aposta "Back Over ..." original
+            # (hoje a estratégia pode ser Back Over 1.5, então não pode filtrar só por 0.5)
+            if 'back over' not in strat:
                 continue
             # Excluir proteção 0-0 e hedges (não tratá-los como Over 0.5)
             if 'proteção' in strat or 'protecao' in strat or 'hedge' in strat:
@@ -2022,27 +2077,10 @@ class BetfairTradingBot:
 
             score = self.get_match_score(market_id) if market_id else None
             if not score:
-                # Feed de placar indisponível — inferir 0-0 pela odd do Over 0.5 no mercado
-                inferred_zero = False
-                try:
-                    mb = self.api.list_market_book([market_id], price_projection={'priceData': ['EX_BEST_OFFERS']})
-                    if mb:
-                        for runner in mb[0].get('runners', []):
-                            if runner.get('selectionId') == 5851483:  # Over 0.5 runner ID
-                                avail = runner.get('ex', {}).get('availableToBack', [])
-                                if avail and avail[0].get('price', 0) > 1.50:
-                                    inferred_zero = True
-                                break
-                except Exception:
-                    pass
-                if inferred_zero:
-                    logger.info(
-                        f"  ⚠️ {event_name}: placar indisponível — odd Over 0.5 alta indica 0-0, prosseguindo"
-                    )
-                    score = {'home': 0, 'away': 0, 'total': 0, 'status': ''}
-                else:
-                    logger.debug(f"  ⏳ {event_name}: placar indisponível e odd não confirma 0-0 — aguardando")
-                    continue
+                # Feed de placar indisponível: sem score não dá para garantir que ainda está 0-0.
+                # Melhor não hedgear do que hedgear com inferência errada.
+                logger.debug(f"  ⏳ {event_name}: placar indisponível (IPS) — aguardando para hedge")
+                continue
             if score.get('total') != 0:
                 logger.info(
                     f"  🚫 {event_name}: placar atual {score.get('home')}-{score.get('away')} — "
@@ -2258,7 +2296,7 @@ class BetfairTradingBot:
                 strategy_name=f"Back Under {goals_val} Alta",
             )
 
-    def _find_cs_zero_zero(self, event_id: str) -> Optional[Dict]:
+    def _find_cs_zero_zero(self, event_id: str, min_odd: float = 1.01) -> Optional[Dict]:
         """
         Busca o mercado de Placar Exato 0-0 para o evento.
         Retorna dict com market_id, selection_id, price, available_size ou None.
@@ -2312,7 +2350,8 @@ class BetfairTradingBot:
                         return None
                     price = available_to_back[0].get('price', 0)
                     size = available_to_back[0].get('size', 0)
-                    if price <= 1.0:
+                    if price <= 1.0 or price < min_odd:
+                        logger.debug(f"CS 0-0: odd {price:.2f} < mínima {min_odd:.2f} — ignorando")
                         return None
                     return {
                         'market_id': cs_market_id,
@@ -2499,81 +2538,64 @@ class BetfairTradingBot:
 
                     if total_goals == 0:
                         min_under_minute = self.soccer_config.get('under_hedge_min_minute', 73)
-                        min_u15_emerg = self.soccer_config.get('under_15_emergency_min_minute', 93)
-                        min_cs00 = self.soccer_config.get('cs00_fallback_min_minute', 88)
+                        min_cs_late = self.soccer_config.get('cs00_fallback_min_minute', 88)
+                        cs_min_odd = 2.10
                         time_available = game_minute is not None
-
-                        # Quando tempo disponível mas ainda muito cedo, aguarda
-                        if time_available and game_minute < min_under_minute:
-                            logger.warning(
-                                f"   ❌ {event_name}: minuto {game_minute} < {min_under_minute} — "
-                                f"Under 2.5/1.5 só a partir do min {min_under_minute}"
-                            )
-                            continue
+                        second_half = self._is_second_half(game_minute, score_status)
 
                         if not time_available:
                             logger.warning(
-                                f"   ⏱️ {event_name}: tempo indisponível, odd Over 0.5 >= {current_over05_price:.2f} "
-                                f"— score 0-0, tentando proteção direta"
+                                f"   ⏱️ {event_name}: tempo indisponível, score 0-0 — usando odd do CS como gatilho principal"
                             )
 
-                        # ── PRIORIDADE 1: Under 2.5 (a partir do min 73, ou quando tempo indisponível)
-                        protection = self.find_under_25_market(event_id, min_odd_override=1.05) if event_id else None
-                        if protection:
-                            label = 'Under 2.5'
-                            strategy_name = 'Proteção Under 2.5'
-                            protection_mode = 'fixed'
-
-                        # ── PRIORIDADE 2: Under 1.5 (a partir do min 93, ou quando tempo indisponível)
-                        if not protection:
-                            if not time_available or game_minute >= min_u15_emerg:
-                                protection = self.find_best_under_market(event_id, min_odd_override=1.05) if event_id else None
-                                if protection:
-                                    label = 'Under 1.5'
-                                    strategy_name = 'Proteção Under 1.5'
-                                    protection_mode = 'fixed'
-                            else:
-                                logger.debug(
-                                    f"   ⏳ {event_name}: Under 2.5 indisponível, Under 1.5 só a partir do min {min_u15_emerg} "
-                                    f"(atual {game_minute})"
-                                )
-
-                        # ── PRIORIDADE 3: 0-0 CS (a partir do min 93, ou sempre que tempo indisponível)
-                        if not protection:
-                            if time_available and game_minute < min_cs00:
-                                logger.warning(
-                                    f"   ❌ {event_name}: Under 2.5/1.5 indisponíveis; "
-                                    f"0-0 CS só a partir do min {min_cs00} (atual {game_minute})"
-                                )
-                                continue
-                            if not time_available:
-                                logger.warning(
-                                    f"   ⏱️ {event_name}: sem tempo — aplicando 0-0 CS como proteção "
-                                    f"(odd Over 0.5 {current_over05_price:.2f} confirma 0-0)"
-                                )
-                            # Guard: só bloqueia se score_status_minute diverge muito do game_minute
-                            if time_available and score_status_minute is not None and abs(score_status_minute - game_minute) > 5:
-                                logger.warning(
-                                    f"   ❌ Fallback 0-0 bloqueado para {event_name}: "
-                                    f"placar pode estar desatualizado (status {score_status_minute} min vs jogo {game_minute} min)"
-                                )
-                                continue
-                            if time_available and score_status_minute is None:
-                                logger.info(
-                                    f"   ⚠️ {event_name}: score_status vazio, game_minute={game_minute} "
-                                    f"é confiável — prosseguindo para 0-0 CS"
-                                )
-                            protection = self._find_cs_zero_zero(event_id) if event_id else None
+                        # ── PRIORIDADE 1: 0-0 CS no 2º tempo com odd >= 2.10
+                        if (second_half or not time_available) and event_id:
+                            protection = self._find_cs_zero_zero(event_id, min_odd=cs_min_odd)
                             if protection:
                                 label = '0-0 Correct Score'
                                 strategy_name = 'Proteção 0-0'
                                 protection_mode = 'fixed'
-                            else:
+                                logger.info(
+                                    f"   ✅ {event_name}: 0-0 CS @ {protection['price']:.2f} ≥ {cs_min_odd:.2f} "
+                                    f"no 2º tempo → BACK fixo de R$15"
+                                )
+
+                        # ── PRIORIDADE 2: Under 2.5 (min 65 real = 73)
+                        if not protection:
+                            if time_available and game_minute < min_under_minute:
                                 logger.warning(
-                                    f"   ❌ Nenhuma proteção disponível para {event_name}: "
-                                    f"Under 2.5/1.5/0-0 CS todos indisponíveis (minuto {game_minute})"
+                                    f"   ❌ {event_name}: ainda cedo para proteção (min {game_minute} < {min_under_minute}) "
+                                    f"e 0-0 CS < {cs_min_odd:.2f}"
                                 )
                                 continue
+                            protection = self.find_under_25_market(event_id, min_odd_override=1.05) if event_id else None
+                            if protection:
+                                label = 'Under 2.5'
+                                strategy_name = 'Proteção Under 2.5'
+                                protection_mode = 'fixed'
+
+                        # PRIORIDADE 3 removida: hedge/proteção Under 1.5 aposentado
+
+                        # ── PRIORIDADE 4: 0-0 CS tardio como último recurso
+                        if not protection:
+                            if time_available and game_minute >= min_cs_late and event_id:
+                                protection = self._find_cs_zero_zero(event_id)
+                                if protection:
+                                    label = '0-0 Correct Score'
+                                    strategy_name = 'Proteção 0-0'
+                                    protection_mode = 'fixed'
+                                    logger.info(
+                                        f"   ⚠️ {event_name}: fallback tardio 0-0 CS @ {protection['price']:.2f} "
+                                        f"no min {game_minute} — BACK fixo de R$15"
+                                    )
+
+                        if not protection:
+                            logger.warning(
+                                f"   ❌ Nenhuma proteção disponível para {event_name}: "
+                                f"CS 0-0 < {cs_min_odd:.2f}, Under 2.5/1.5 indisponíveis "
+                                f"e fallback tardio não disponível (minuto {game_minute})"
+                            )
+                            continue
                     else:
                         protection = self.find_under_25_market(event_id) if event_id else None
                         label = 'Under 2.5'
@@ -2586,12 +2608,7 @@ class BetfairTradingBot:
                             )
                             continue
 
-                    if not protection:
-                        logger.warning(
-                            f"   ❌ Nenhuma proteção Under 1.5 disponível para {event_name} "
-                            f"com odd mínima {self.soccer_config.get('min_odd', 2.15):.2f}"
-                        )
-                        continue
+                    # Sem prioridade Under 1.5 (aposentado)
 
                     prot_price = protection['price']
                     over05_entry_price = float(bet.get('entry_price', 1.0) or 1.0)
@@ -2728,10 +2745,11 @@ class BetfairTradingBot:
         soccer_bets_count = sum(1 for b in self.active_bets.values() 
                               if b.sport == SportType.SOCCER and b.status == BetStatus.ACTIVE)
         logger.info(f"📈 Apostas ativas de futebol: {soccer_bets_count} (sem limite)")
+        goal_line = self.soccer_config.get('entry_goal_line', 1.5)
         
         for match in matches[:20]:
             market_id = match['market_id']
-            over_05_runner_id = match.get('over_05_runner_id')
+            entry_runner_id = match.get('entry_runner_id')
             event_id = match.get('event_id')
             event_name = match.get('event_name', 'N/A')
             matches_checked += 1
@@ -2774,11 +2792,11 @@ class BetfairTradingBot:
                 time_source = f"feed={game_minute}'" if game_minute is not None else "startTime"
                 logger.info(f"⏱️ {event_name}: tempo disponível via {time_source} — prosseguindo")
 
-            entry_conditions = self.check_soccer_entry_conditions(market_id, over_05_runner_id, is_pre_match)
+            entry_conditions = self.check_soccer_entry_conditions(market_id, entry_runner_id, is_pre_match)
             
             if entry_conditions:
                 matches_with_conditions += 1
-                logger.info(f"✅ Condições Over 0.5 atendidas para {event_name} - Price: {entry_conditions['price']:.2f}")
+                logger.info(f"✅ Condições Over {goal_line:.1f} atendidas para {event_name} - Price: {entry_conditions['price']:.2f}")
                 bet_id = self.place_back_bet(
                     market_id=market_id,
                     selection_id=entry_conditions['selection_id'],
@@ -2788,7 +2806,7 @@ class BetfairTradingBot:
                 
                 if bet_id:
                     entry_time = datetime.now()
-                    strategy_name = "Back Over 0.5"
+                    strategy_name = f"Back Over {goal_line:.1f}"
                     bet = ActiveBet(
                         bet_id=bet_id,
                         market_id=market_id,
@@ -2829,8 +2847,8 @@ class BetfairTradingBot:
                     
                     pre_match_mode = match.get('is_pre_match', False)
                     mode_text = "PRÉ-LIVE" if pre_match_mode else "AO VIVO"
-                    logger.info(f"✓✓✓ NOVA APOSTA FUTEBOL {mode_text} (BACK Over 0.5): {match['event_name']} - Price {entry_conditions['price']:.2f} - Stake R$ {self.stake:.2f}")
-                    logger.info(f"   → Você GANHA quando sair 1 gol (Over 0.5)")
+                    logger.info(f"✓✓✓ NOVA APOSTA FUTEBOL {mode_text} (BACK Over {goal_line:.1f}): {match['event_name']} - Price {entry_conditions['price']:.2f} - Stake R$ {self.stake:.2f}")
+                    logger.info(f"   → Estratégia seletiva (sem Under 1.5): jogo precisa chegar em 2+ gols totais")
                     
                     # Enviar notificação do Telegram
                     if self.telegram and self.telegram.enabled:
@@ -3002,6 +3020,9 @@ class BetfairTradingBot:
         
         matches = self.find_live_tennis_matches()
         logger.info(f"Encontradas {len(matches)} partidas de tênis ao vivo")
+        entry_min_odd = self.tennis_config.get('entry_min_odd', 1.80)
+        entry_max_odd = self.tennis_config.get('entry_max_odd', 2.20)
+        max_concurrent_bets = self.tennis_config.get('max_concurrent_bets', 7)
         
         for match in matches:
             try:
@@ -3012,15 +3033,19 @@ class BetfairTradingBot:
                 if not favorite or not favorite_odd:
                     continue
                 
-                # Verificar se já temos aposta ativa
-                for bet in self.active_bets.values():
-                    if bet.market_id == market_id and bet.status == BetStatus.ACTIVE:
-                        continue
+                # Evitar duplicar aposta no mesmo jogo/mercado
+                already_active = any(
+                    bet.market_id == market_id and bet.status == BetStatus.ACTIVE
+                    for bet in self.active_bets.values()
+                )
+                if already_active:
+                    continue
                 
                 # Verificar limite
                 tennis_bets_count = sum(1 for b in self.active_bets.values() 
                                       if b.sport == SportType.TENNIS and b.status == BetStatus.ACTIVE)
-                if tennis_bets_count >= self.max_bets_per_sport:
+                if tennis_bets_count >= max_concurrent_bets:
+                    logger.info(f"🎾 Limite de apostas de tênis atingido: {tennis_bets_count}/{max_concurrent_bets}")
                     continue
                 
                 # Verificar se o mercado está aberto e obter odd atual
@@ -3071,8 +3096,12 @@ class BetfairTradingBot:
                     logger.debug(f"Mercado {market_id}: Preço inválido: {current_price}")
                     continue
                 
-                if current_price > self.tennis_config['favorite_max_odd']:
-                    logger.debug(f"Mercado {market_id}: Odd muito alta: {current_price} > {self.tennis_config['favorite_max_odd']}")
+                if current_price < entry_min_odd:
+                    logger.debug(f"Mercado {market_id}: Odd abaixo da faixa: {current_price} < {entry_min_odd}")
+                    continue
+                
+                if current_price > entry_max_odd:
+                    logger.debug(f"Mercado {market_id}: Odd muito alta: {current_price} > {entry_max_odd}")
                     continue
                 
                 # Verificar liquidez suficiente
@@ -3129,14 +3158,15 @@ class BetfairTradingBot:
                 
                 if bet_id:
                     entry_time = datetime.now()
+                    strategy_name = "Back Favorite Drift"
                     bet = ActiveBet(
                         bet_id=bet_id,
                         market_id=market_id,
                         event_id=match['event_id'],
                         sport=SportType.TENNIS,
-                        strategy="Back Favorite",
+                        strategy=strategy_name,
                         side="BACK",
-                        selection_id=favorite.get('id'),
+                        selection_id=str(selection_id_int),
                         entry_price=current_price,
                         entry_time=entry_time,
                         stake=self.stake,
@@ -3156,9 +3186,9 @@ class BetfairTradingBot:
                         'event_id': match['event_id'],
                         'event_name': match.get('event_name', ''),
                         'sport': SportType.TENNIS.name,
-                        'strategy': "Back Favorite",
+                        'strategy': strategy_name,
                         'side': "BACK",
-                        'selection_id': favorite.get('id'),
+                        'selection_id': str(selection_id_int),
                         'entry_price': current_price,
                         'entry_time': entry_time.isoformat(),
                         'stake': self.stake,
@@ -3178,7 +3208,7 @@ class BetfairTradingBot:
                                 'bet_id': bet_id,
                                 'event_name': match.get('event_name', ''),
                                 'sport': SportType.TENNIS.name,
-                                'strategy': "Back Favorite",
+                                'strategy': strategy_name,
                                 'side': "BACK",
                                 'entry_price': current_price,
                                 'stake': self.stake,
@@ -4171,9 +4201,9 @@ class BetfairTradingBot:
                 # Processar estratégias
                 if self.soccer_config['enabled']:
                     self.process_soccer_strategy()
-                    self.process_under_high_hedge_monitoring()
-                    self.process_under_hedge_monitoring()
-                    self.process_zero_zero_protection()
+                    if self.soccer_config.get('entry_goal_line', 1.5) == 0.5:
+                        self.process_under_high_hedge_monitoring()
+                        self.process_zero_zero_protection()
                 else:
                     logger.debug("Estratégia de futebol desabilitada no config")
 
@@ -4189,9 +4219,8 @@ class BetfairTradingBot:
                 # if self.hockey_config['enabled']:
                 #     self.process_hockey_strategy()
                 
-                # Tênis desabilitado
-                # if self.tennis_config['enabled']:
-                #     self.process_tennis_strategy()
+                if self.tennis_config['enabled']:
+                    self.process_tennis_strategy()
                 
                 # Estatísticas a cada 10 ciclos
                 if self.bet_counter % 10 == 0:

@@ -766,6 +766,8 @@ def get_config():
                 'stake': float(config.get('bot', 'stake', fallback='15.0')),
                 'max_bets_per_sport': int(config.get('bot', 'max_bets_per_sport', fallback='20')),
                 'check_interval': int(config.get('bot', 'check_interval', fallback='30')),
+                'soccer_enabled': config.getboolean('soccer', 'enabled', fallback=True),
+                'tennis_enabled': config.getboolean('tennis', 'enabled', fallback=False),
                 'min_odd': float(config.get('soccer', 'min_odd', fallback='2.15')),
                 'max_odd': max_odd,
                 'over_05_odds_min': float(config.get('soccer', 'over_05_odds_min', fallback='1.01')),
@@ -797,6 +799,41 @@ def get_config():
             'success': False,
             'message': f'Erro ao ler configurações: {str(e)}'
         }), 500
+
+
+@app.route('/api/sports/toggle', methods=['POST'])
+def toggle_sport_enabled():
+    """
+    Pausar/retomar um esporte no bot.
+    Body: { "sport": "soccer" | "tennis", "enabled": true | false }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        sport = data.get('sport')
+        enabled = bool(data.get('enabled'))
+
+        if sport not in ('soccer', 'tennis'):
+            return jsonify({'success': False, 'message': 'sport inválido'}), 400
+
+        cfg_path = _find_config_file()
+        if not cfg_path:
+            return jsonify({'success': False, 'message': 'bot_config.ini não encontrado'}), 404
+
+        config = ConfigParser()
+        config.read(cfg_path)
+
+        if not config.has_section(sport):
+            config.add_section(sport)
+        config.set(sport, 'enabled', 'true' if enabled else 'false')
+
+        with open(cfg_path, 'w', encoding='utf-8') as f:
+            config.write(f)
+
+        label = 'Futebol' if sport == 'soccer' else 'Tênis'
+        state = 'ATIVADO' if enabled else 'PAUSADO'
+        return jsonify({'success': True, 'message': f'{label}: {state}'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/config', methods=['POST'])
 def save_config():

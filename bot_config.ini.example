@@ -5,8 +5,11 @@ check_interval = 30
 
 [soccer]
 enabled = true
-entry_min_minute = 1
-entry_max_minute = 25
+entry_min_minute = 20
+entry_max_minute = 30
+entry_goal_line = 1.5
+entry_odds_min = 1.80
+entry_odds_max = 2.20
 take_profit_pct = 1.5
 stop_loss_pct = 10.0
 timeout_minutes = 10
@@ -17,16 +20,16 @@ max_odd =
 under_25_min_odd = 1.35
 under_25_max_odd =
 check_time_window = true
-pre_match_enabled = true
-under_hedge_enabled = true
+pre_match_enabled = false
+under_hedge_enabled = false
 under_hedge_stake = 15
-under_hedge_min_minute = 73
+under_hedge_min_minute = 68
 cs00_fallback_min_minute = 88
 under_15_emergency_min_minute = 93
-stop_loss_lay_enabled = true
+stop_loss_lay_enabled = false
 stop_loss_lay_threshold = 2
 require_game_time_to_bet = true
-under_high_hedge_enabled = true
+under_high_hedge_enabled = false
 under_high_hedge_stake = 15
 under_high_hedge_min_odd = 1.15
 under_high_hedge_min_odd_first_entry = 1.08
@@ -47,8 +50,10 @@ stop_loss_pct = 15.0
 timeout_minutes = 5
 
 [tennis]
-enabled = false
-favorite_max_odd = 1.40
+enabled = true
+entry_min_odd = 1.80
+entry_max_odd = 2.20
+max_concurrent_bets = 7
 take_profit_pct = 3.0
 stop_loss_pct = 10.0
 

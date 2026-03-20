@@ -256,12 +256,20 @@
                 <button id="btn-over-05" class="strategy-btn" onclick="toggleStrategy('over_05')">
                     Over 0.5 Gols <span class="badge">BACK Under 1.5</span>
                 </button>
-                <button id="btn-under-hedge" class="strategy-btn" onclick="toggleStrategy('under_hedge')">
-                    Hedge Under 1.5 <span class="badge">2ª aposta — a partir do 75º min</span>
+                <button id="btn-under-hedge" class="strategy-btn" onclick="return false;">
+                    Hedge Under 1.5 (aposentado) <span class="badge">em breve nova estratégia</span>
                 </button>
                 <button id="btn-under-high-hedge" class="strategy-btn" onclick="toggleStrategy('under_high_hedge')">
                     Under Alta 4.5/5.5/6.5 <span class="badge">até 2 entradas por jogo</span>
                 </button>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">Pause Esportes</div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                <button id="btn-pause-soccer" class="btn btn-red" onclick="toggleSport('soccer')">Pausar Futebol</button>
+                <button id="btn-pause-tennis" class="btn btn-red" onclick="toggleSport('tennis')">Pausar Tênis</button>
             </div>
         </section>
 
@@ -1228,8 +1236,62 @@
                 if (cd.success && cd.config) {
                     applyStrategyStyle('btn-under-hedge', cd.config.under_hedge_enabled);
                     applyStrategyStyle('btn-under-high-hedge', cd.config.under_high_hedge_enabled);
+
+                    // Pause Esportes
+                    applySportPauseButton('btn-pause-soccer', cd.config.soccer_enabled ?? true, 'Futebol');
+                    applySportPauseButton('btn-pause-tennis', cd.config.tennis_enabled ?? false, 'Tênis');
                 }
             } catch(e) { console.error('Erro ao carregar status das estratégias:', e); }
+        }
+
+        function applySportPauseButton(btnId, enabled, sportLabel) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+
+            if (enabled) {
+                btn.classList.remove('btn-green');
+                btn.classList.add('btn-red');
+                btn.textContent = `Pausar ${sportLabel}`;
+            } else {
+                btn.classList.remove('btn-red');
+                btn.classList.add('btn-green');
+                btn.textContent = `Retomar ${sportLabel}`;
+            }
+        }
+
+        async function toggleSport(sport) {
+            try {
+                const rc = await fetch('/api/config');
+                const dc = await rc.json();
+                if (!dc.success || !dc.config) {
+                    alert(dc.message || 'Falha ao carregar config');
+                    return;
+                }
+
+                const currEnabled = sport === 'soccer'
+                    ? (dc.config.soccer_enabled ?? true)
+                    : (dc.config.tennis_enabled ?? false);
+                const nextEnabled = !currEnabled;
+
+                const label = sport === 'soccer' ? 'Futebol' : 'Tênis';
+
+                const r = await fetch('/api/sports/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sport: sport, enabled: nextEnabled })
+                });
+
+                const d = await r.json();
+                if (d.success) {
+                    await loadStrategyStatus();
+                    await updateData();
+                    showToast(`${label} ${nextEnabled ? 'ativado' : 'pausado'}`);
+                } else {
+                    alert(d.message || 'Erro ao alterar pause');
+                }
+            } catch(e) {
+                alert('Erro: ' + e.message);
+            }
         }
 
         async function toggleStrategy(strategy) {
