@@ -340,9 +340,6 @@ class BetfairTradingBot:
             'over05_defensive_max':  float(self.bot_config.get('under_filter', 'over05_defensive_max', fallback='1.50')),
             'over05_verydefensive_min': float(self.bot_config.get('under_filter', 'over05_verydefensive_min', fallback='1.50')),
             'under_45_min_odd':      float(self.bot_config.get('under_filter', 'under_45_min_odd', fallback='1.15')),
-            'under_35_min_odd':      float(self.bot_config.get('under_filter', 'under_35_min_odd', fallback='1.15')),
-            'under_55_min_odd':      float(self.bot_config.get('under_filter', 'under_55_min_odd', fallback='1.15')),
-            'under_65_min_odd':      float(self.bot_config.get('under_filter', 'under_65_min_odd', fallback='1.03')),
             'pre_match_enabled':     self.bot_config.getboolean('under_filter', 'pre_match_enabled', fallback=False),
             'run_interval':          int(self.bot_config.get('under_filter', 'run_interval', fallback='60')),
         }
@@ -2900,13 +2897,13 @@ class BetfairTradingBot:
     def process_under_filter_strategy(self):
         """
         Estratégia Under Filter: monitora mercados Over 0.5 ao vivo e,
-        quando a odd está alta o suficiente, procura Under 4.5 / 3.5 / 5.5.
+        quando a odd está alta o suficiente, procura apenas Under 4.5.
 
         Regras atuais:
           - Pré-jogo: só aceita Under 4.5
           - Ao vivo: exige placar confirmado em 0-0
-          - Over 0.5 abaixo de 1.17      → não apostar (jogo muito aberto)
-          - Prioridade ao vivo           → Under 4.5, depois 3.5, depois 5.5
+          - Over 0.5 abaixo de 1.15      → não apostar (jogo muito aberto)
+          - Linha usada                  → Under 4.5 apenas
           - Odd mínima do Under          → 1.15 para evitar entradas improváveis demais
         """
         config = self.under_filter_config
@@ -3071,7 +3068,7 @@ class BetfairTradingBot:
 
             processed += 1
 
-            # 3. Montar a prioridade de mercados Under baseada na odd do Over 0.5
+            # 3. Decidir se o Over 0.5 está em faixa aceitável para Under 4.5
             mod_min  = config['over05_moderate_min']
             mod_max  = config['over05_moderate_max']
             def_min  = config['over05_defensive_min']
@@ -3091,19 +3088,10 @@ class BetfairTradingBot:
                 )
                 continue
 
-            if is_inplay:
-                candidate_markets = [
-                    (4.5, 'OVER_UNDER_45', config['under_45_min_odd']),
-                    (3.5, 'OVER_UNDER_35', config['under_35_min_odd']),
-                ]
-                if over05_odds >= def_min:
-                    candidate_markets.append((5.5, 'OVER_UNDER_55', config['under_55_min_odd']))
-                priority_label = "Under 4.5 > 3.5 > 5.5"
-            else:
-                candidate_markets = [
-                    (4.5, 'OVER_UNDER_45', config['under_45_min_odd']),
-                ]
-                priority_label = "Under 4.5 apenas (pré-jogo)"
+            candidate_markets = [
+                (4.5, 'OVER_UNDER_45', config['under_45_min_odd']),
+            ]
+            priority_label = "Under 4.5 apenas"
 
             logger.info(
                 f"[Under Filter] {event_name}: Over 0.5 @ {over05_odds:.2f} "
