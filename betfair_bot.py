@@ -46,8 +46,30 @@ logging.getLogger("requests").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ─── Chaves de API ────────────────────────────────────────────────────────────
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
-GROQ_API_KEY     = os.getenv("GROQ_API_KEY", "")
+# Prioridade: variável de ambiente → bot_config.ini → vazio
+def _load_api_keys() -> tuple:
+    football_key = os.getenv("API_FOOTBALL_KEY", "")
+    groq_key     = os.getenv("GROQ_API_KEY", "")
+
+    if not football_key or not groq_key:
+        _cfg = ConfigParser()
+        for path in ["bot_config.ini", "/app/bot_config.ini"]:
+            if os.path.exists(path):
+                _cfg.read(path)
+                break
+        if not football_key:
+            football_key = _cfg.get("api_keys", "api_football_key", fallback="")
+        if not groq_key:
+            groq_key = _cfg.get("api_keys", "groq_api_key", fallback="")
+
+    if not football_key:
+        logger.warning("⚠️  API_FOOTBALL_KEY não encontrada. Stats não disponíveis.")
+    if not groq_key:
+        logger.error("❌  GROQ_API_KEY não encontrada. Bot não conseguirá analisar jogos.")
+
+    return football_key, groq_key
+
+API_FOOTBALL_KEY, GROQ_API_KEY = _load_api_keys()
 
 STRATEGY_FILE = "data/active_strategy.txt"
 
