@@ -153,7 +153,9 @@ class BetfairAPI:
             dict: Resposta da API
         """
         if not self.session_token:
-            raise Exception("Token de sessão não encontrado. Execute login() primeiro.")
+            logging.getLogger(__name__).warning("Token ausente. Tentando re-login automático...")
+            if not self.login(force_fresh=True):
+                raise Exception("Re-login automático falhou. Verifique credenciais e conectividade.")
         
         headers = {
             'X-Application': self.app_key,
@@ -198,7 +200,8 @@ class BetfairAPI:
                         endpoint_to_use,
                         json=payload,
                         headers=headers,
-                        timeout=30  # Timeout de 30 segundos
+                        timeout=30,
+                        proxies={'http': None, 'https': None}
                     )
                     
                     response.raise_for_status()
@@ -223,7 +226,8 @@ class BetfairAPI:
                                     endpoint_to_use,
                                     json=payload,
                                     headers=headers,
-                                    timeout=30
+                                    timeout=30,
+                                    proxies={'http': None, 'https': None}
                                 )
                                 response.raise_for_status()
                                 result = response.json()

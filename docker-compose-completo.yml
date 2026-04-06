@@ -22,9 +22,16 @@ services:
     environment:
       - TZ=America/Sao_Paulo
       - PYTHONUNBUFFERED=1
+      # Desabilitar proxy herdado do host — o container acessa Betfair diretamente
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
     labels:
       - "com.docker.compose.project=betfair-trading"
-      - "description=Bot de Trading Betfair - Time Decay Strategy"
+      - "description=Bot de Trading Betfair - Smart Goals Over 2.5"
     networks:
       - betfair-network
     depends_on:

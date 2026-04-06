@@ -1001,6 +1001,80 @@ def strategy_toggle():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+STRATEGY_FILE = "data/active_strategy.txt"
+STRATEGY_LABELS = {
+    "over15":    "Estratégia 1 — Over 1.5 Gols",
+    "favorite":  "Estratégia 2 — Favorito (Match Odds)",
+    "under_max": "Estratégia 3 — Under Máximo",
+    "under45":   "Estratégia 4 — Under 4.5 Fixo (1.25–1.45)",
+    "over25":    "Estratégia Over 2.5 + IA",
+}
+
+
+def _read_active_strategy() -> str:
+    for path in [STRATEGY_FILE, "/app/data/active_strategy.txt"]:
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+    return "over15"
+
+
+def _write_active_strategy(strategy: str):
+    for path in [STRATEGY_FILE, "/app/data/active_strategy.txt"]:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(strategy)
+            return
+        except Exception:
+            continue
+
+
+@app.route('/api/active-strategy', methods=['GET'])
+def get_active_strategy():
+    """Retorna a estratégia ativa no momento."""
+    current = _read_active_strategy()
+    return jsonify({
+        "success": True,
+        "strategy": current,
+        "label": STRATEGY_LABELS.get(current, current),
+        "available": [
+            {"id": "over15",   "label": "Estratégia 1 — Over 1.5 Gols",       "description": "Aposta em jogos com 2+ gols. Win rate ~72%. Odds 1.25-1.60."},
+            {"id": "favorite", "label": "Estratégia 2 — Favorito (Match Odds)", "description": "Aposta no time favorito. Win rate ~62-70%. Odds 1.45-1.90."},
+            {"id": "over25",   "label": "Estratégia Over 2.5 + IA",             "description": "Aposta em jogos com 3+ gols com análise Groq. Odds 1.80-2.60."},
+        ],
+    })
+
+
+@app.route('/api/active-strategy', methods=['POST'])
+def set_active_strategy():
+    """
+    Troca a estratégia ativa.
+    Body: { "strategy": "over15" | "favorite" | "under_max" | "under45" | "over25" }
+    O bot vai detectar a mudança no próximo ciclo (sem reiniciar).
+    """
+    try:
+        data = request.get_json() or {}
+        new_strategy = data.get("strategy", "").strip().lower()
+
+        if new_strategy not in ("over15", "favorite", "under_max", "under45", "over25"):
+            return jsonify({"success": False, "message": "Estratégia inválida. Use: over15, favorite, under_max, under45, over25"}), 400
+
+        _write_active_strategy(new_strategy)
+        label = STRATEGY_LABELS.get(new_strategy, new_strategy)
+        return jsonify({
+            "success": True,
+            "strategy": new_strategy,
+            "label": label,
+            "message": f"Estratégia trocada para: {label}. O bot vai aplicar no próximo ciclo.",
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @app.route('/api/bet/<bet_id>/cashout', methods=['POST'])
 def cashout_bet(bet_id):
     """Faz cashout de uma aposta específica (fecha a posição fazendo hedge)"""

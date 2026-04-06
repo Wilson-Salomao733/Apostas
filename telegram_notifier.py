@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 Módulo para enviar notificações via Telegram Bot
+Inclui polling de comandos para troca de estratégia.
 """
 
+import json
+import os
 import requests
 import logging
 from typing import Optional, Dict
@@ -192,3 +195,149 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Erro ao enviar notificação de aposta fechada: {e}")
             return False
+
+    # ─── Polling de Comandos ──────────────────────────────────────────────────
+
+    STRATEGY_FILE = "data/active_strategy.txt"
+    OFFSET_FILE   = "data/telegram_offset.txt"
+
+    STRATEGIES = {
+        # Aceita variações com/sem acento, número ou texto
+        "estratégia 1": "over15",
+        "estrategia 1": "over15",
+        "estratégia1":  "over15",
+        "estrategia1":  "over15",
+        "/estrategia1": "over15",
+        "/e1":          "over15",
+        "over15":       "over15",
+        "over 1.5":     "over15",
+        "estratégia 2": "favorite",
+        "estrategia 2": "favorite",
+        "estratégia2":  "favorite",
+        "estrategia2":  "favorite",
+        "/estrategia2": "favorite",
+        "/e2":          "favorite",
+        "favorito":     "favorite",
+        "favorite":     "favorite",
+        # Under Máximo
+        "estratégia 3": "under_max",
+        "estrategia 3": "under_max",
+        "estratégia3":  "under_max",
+        "estrategia3":  "under_max",
+        "/estrategia3": "under_max",
+        "/e3":          "under_max",
+        "under":        "under_max",
+        "under max":    "under_max",
+        "under_max":    "under_max",
+        # Under 4.5 Fixo
+        "estratégia 4": "under45",
+        "estrategia 4": "under45",
+        "estratégia4":  "under45",
+        "estrategia4":  "under45",
+        "/estrategia4": "under45",
+        "/e4":          "under45",
+        "under45":      "under45",
+        "under 4.5":    "under45",
+    }
+
+    STRATEGY_LABELS = {
+        "over15":    "Estratégia 1 — Over 1.5 Gols",
+        "favorite":  "Estratégia 2 — Favorito (Match Odds)",
+        "under_max": "Estratégia 3 — Under Máximo",
+        "under45":   "Estratégia 4 — Under 4.5 Fixo",
+        "over25":    "Estratégia Over 2.5 Gols",
+    }
+
+    def check_commands(self) -> Optional[str]:
+        """
+        Verifica se chegou algum comando de troca de estratégia no Telegram.
+        Retorna o nome da nova estratégia ('over15', 'favorite') ou None.
+        Também responde /status com o estado atual do bot.
+        """
+        if not self.enabled:
+            return None
+
+        updates = self._get_updates()
+        new_strategy = None
+
+        for update in updates:
+            msg  = update.get("message", {})
+            text = msg.get("text", "").lower().strip()
+
+            if text in ("/status", "status", "/estado"):
+                current = self._read_active_strategy()
+                label   = self.STRATEGY_LABELS.get(current, current)
+                self.send_message(
+                    f"🤖 <b>Status do Bot</b>\n\n"
+                    f"📊 Estratégia ativa: <b>{label}</b>\n\n"
+                    f"Comandos:\n"
+                    f"• <code>estratégia 1</code> → Over 1.5 Gols\n"
+                    f"• <code>estratégia 2</code> → Favorito\n"
+                    f"• <code>status</code> → Este menu"
+                )
+                continue
+
+            mapped = self.STRATEGIES.get(text)
+            if mapped:
+                new_strategy = mapped
+                label = self.STRATEGY_LABELS.get(mapped, mapped)
+                self.send_message(
+                    f"🔄 <b>Trocando estratégia...</b>\n\n"
+                    f"✅ Nova estratégia: <b>{label}</b>\n"
+                    f"⏳ O bot vai aplicar a mudança no próximo ciclo."
+                )
+
+        if new_strategy:
+            self._write_active_strategy(new_strategy)
+
+        return new_strategy
+
+    def _get_updates(self) -> list:
+        """Busca novas mensagens do Telegram (sem bloquear)."""
+        try:
+            offset = self._load_offset()
+            resp = requests.get(
+                f"https://api.telegram.org/bot{self.token}/getUpdates",
+                params={"timeout": 0, "offset": offset},
+                timeout=10,
+                proxies={"http": None, "https": None},
+            )
+            if resp.status_code != 200:
+                return []
+            updates = resp.json().get("result", [])
+            if updates:
+                self._save_offset(updates[-1]["update_id"] + 1)
+            return updates
+        except Exception as e:
+            logger.debug(f"Telegram getUpdates: {e}")
+            return []
+
+    def _load_offset(self) -> int:
+        try:
+            if os.path.exists(self.OFFSET_FILE):
+                with open(self.OFFSET_FILE) as f:
+                    return int(f.read().strip())
+        except Exception:
+            pass
+        return 0
+
+    def _save_offset(self, offset: int):
+        os.makedirs("data", exist_ok=True)
+        with open(self.OFFSET_FILE, "w") as f:
+            f.write(str(offset))
+
+    @staticmethod
+    def _read_active_strategy() -> str:
+        try:
+            if os.path.exists(TelegramNotifier.STRATEGY_FILE):
+                with open(TelegramNotifier.STRATEGY_FILE) as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+        return "over15"
+
+    @staticmethod
+    def _write_active_strategy(strategy: str):
+        os.makedirs("data", exist_ok=True)
+        with open(TelegramNotifier.STRATEGY_FILE, "w") as f:
+            f.write(strategy)

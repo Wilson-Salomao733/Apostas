@@ -61,14 +61,15 @@ class BetfairLogin:
         if not os.path.exists(self.key_file):
             raise FileNotFoundError(f"Arquivo de chave não encontrado: {self.key_file}")
         
-        # Fazer requisição POST com certificado
+        # Fazer requisição POST com certificado (sem proxy — acesso direto)
         try:
             response = requests.post(
                 self.endpoint,
                 data=payload,
                 cert=(self.cert_file, self.key_file),
                 headers=headers,
-                verify=True
+                verify=True,
+                proxies={'http': None, 'https': None}
             )
             
             response.raise_for_status()
