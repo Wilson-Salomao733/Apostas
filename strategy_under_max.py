@@ -115,8 +115,15 @@ class StrategyUnderMax:
             logger.warning(f"[UnderMax] Stop loss: R${self.daily_losses:.2f}")
             return False
         if self.daily_profit >= self.daily_profit_tgt:
-            logger.info(f"[UnderMax] Meta atingida: +R${self.daily_profit:.2f}")
-            return False
+            logger.info(
+                f"[UnderMax] 🔄 Meta atingida: +R${self.daily_profit:.2f} — "
+                f"reiniciando contadores para novo ciclo."
+            )
+            self.daily_profit       = 0.0
+            self.daily_losses       = 0.0
+            self.consecutive_losses = 0
+            self.bets_placed_today  = 0
+            self._checked_events.clear()
         if self.consecutive_losses >= 3:
             logger.warning("[UnderMax] 3 derrotas consecutivas. Pausando.")
             return False

@@ -6,8 +6,11 @@ Cliente básico para interagir com a API Betfair Exchange
 import requests
 import json
 import logging
+import time
 from configparser import ConfigParser
 from betfair_login import BetfairLogin
+
+logger = logging.getLogger(__name__)
 
 class BetfairAPI:
     def __init__(self, config_file='config.ini'):
@@ -67,15 +70,15 @@ class BetfairAPI:
                     saved_token = f.read().strip()
                 if saved_token:
                     self.session_token = saved_token
-                    logging.getLogger(__name__).info(
+                    logger.info(
                         f"✅ Token carregado de {TOKEN_FILE} — assumindo válido.")
                     return True
             except Exception as e:
-                logging.getLogger(__name__).debug(f"Erro ao ler {TOKEN_FILE}: {e}")
+                logger.debug(f"Erro ao ler {TOKEN_FILE}: {e}")
                 self.session_token = None
 
         if force_fresh:
-            logging.getLogger(__name__).info("🔑 Solicitando novo token de sessão via rede...")
+            logger.info("🔑 Solicitando novo token de sessão via rede...")
 
         # 2. Tentar login com endpoint configurado
         try:
@@ -84,15 +87,15 @@ class BetfairAPI:
             if token:
                 self.session_token = token
                 self._save_token(token, TOKEN_FILE)
-                logging.getLogger(__name__).info("✅ Login realizado com sucesso.")
+                logger.info("✅ Login realizado com sucesso.")
                 return True
         except Exception as e:
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 f"⚠️ Login via endpoint '{self.jurisdiction}' falhou: {e}")
 
         # 3. Fallback: login pelo endpoint internacional (betfair.com)
         try:
-            logging.getLogger(__name__).info(
+            logger.info(
                 "🔄 Tentando login via endpoint internacional (betfair.com)...")
             login_client_fallback = BetfairLogin.__new__(BetfairLogin)
             # Copiar atributos e trocar endpoint
@@ -108,14 +111,14 @@ class BetfairAPI:
             if token_fb:
                 self.session_token = token_fb
                 self._save_token(token_fb, TOKEN_FILE)
-                logging.getLogger(__name__).info(
+                logger.info(
                     "✅ Login realizado via endpoint internacional.")
                 return True
         except Exception as e:
-            logging.getLogger(__name__).error(
+            logger.error(
                 f"❌ Login via fallback também falhou: {e}")
 
-        logging.getLogger(__name__).error(
+        logger.error(
             "❌ Não foi possível obter token de sessão por nenhum método.")
         return False
 
@@ -133,7 +136,7 @@ class BetfairAPI:
             with open(path, 'w') as f:
                 f.write(token)
         except Exception as e:
-            logging.getLogger(__name__).debug(f"Não foi possível salvar token: {e}")
+            logger.debug(f"Não foi possível salvar token: {e}")
     
     def set_session_token(self, token):
         """Define o token de sessão manualmente"""
@@ -153,7 +156,7 @@ class BetfairAPI:
             dict: Resposta da API
         """
         if not self.session_token:
-            logging.getLogger(__name__).warning("Token ausente. Tentando re-login automático...")
+            logger.warning("Token ausente. Tentando re-login automático...")
             if not self.login(force_fresh=True):
                 raise Exception("Re-login automático falhou. Verifique credenciais e conectividade.")
         
@@ -172,18 +175,12 @@ class BetfairAPI:
         
         # Log detalhado para placeOrders (debug)
         if 'placeOrders' in method:
-            import json
-            import logging
-            logger = logging.getLogger(__name__)
             logger.debug(f"DEBUG placeOrders - Payload completo: {json.dumps(payload, indent=2, default=str)}")
-        
+
         # Usar endpoint customizado se fornecido, senão usar o padrão
         api_endpoint = endpoint or self.api_endpoint
-        
+
         # Retry logic para erros de rede/DNS
-        import time
-        import logging
-        logger = logging.getLogger(__name__)
         last_exception = None
         
         # Tentar endpoint principal primeiro
@@ -560,14 +557,14 @@ class BetfairAPI:
                 return response.json()
             else:
                 # Se falhar com autenticação, tentar sem (pode precisar de cookies de sessão)
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     f"Erro ao buscar apostas finalizadas: {response.status_code}. "
                     "Pode ser necessário autenticação via cookies."
                 )
                 return None
                 
         except Exception as e:
-            logging.getLogger(__name__).error(f"Erro ao buscar apostas finalizadas: {e}")
+            logger.error(f"Erro ao buscar apostas finalizadas: {e}")
             return None
     
     def get_market_result(self, market_id):
@@ -636,7 +633,7 @@ class BetfairAPI:
             return result
             
         except Exception as e:
-            logging.getLogger(__name__).error(f"Erro ao buscar resultado do mercado: {e}")
+            logger.error(f"Erro ao buscar resultado do mercado: {e}")
             return None
 
 
