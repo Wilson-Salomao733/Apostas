@@ -91,8 +91,15 @@ class StrategyUnder45:
 
     def _check_limits(self) -> bool:
         if self.daily_losses >= self.daily_loss_limit:
-            logger.warning(f"[Under45] Stop loss atingido: R${self.daily_losses:.2f}")
-            return False
+            logger.warning(
+                f"[Under45] 🔄 Stop loss do ciclo: R${self.daily_losses:.2f} — "
+                f"reiniciando contadores (novo ciclo, apostas retomam)."
+            )
+            self.daily_profit       = 0.0
+            self.daily_losses       = 0.0
+            self.consecutive_losses = 0
+            self.bets_placed_today  = 0
+            self._checked_events.clear()
         if self.daily_profit >= self.daily_profit_tgt:
             logger.info(
                 f"[Under45] 🔄 Meta atingida: +R${self.daily_profit:.2f} — "

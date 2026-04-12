@@ -154,9 +154,14 @@ class StrategyOver25:
         """Retorna True se pode continuar apostando."""
         if self.daily_losses >= self.daily_loss_limit:
             logger.warning(
-                f"Stop loss diário atingido: R${self.daily_losses:.2f} de perdas"
+                f"🔄 Stop loss do ciclo: R${self.daily_losses:.2f} — "
+                f"reiniciando contadores (novo ciclo)."
             )
-            return False
+            self.daily_profit        = 0.0
+            self.daily_losses        = 0.0
+            self.consecutive_losses  = 0
+            self.bets_placed_today   = 0
+            self._markets_checked_today.clear()
         if self.daily_profit >= self.daily_profit_target:
             logger.info(
                 f"🔄 Meta atingida: +R${self.daily_profit:.2f} — "
@@ -165,6 +170,7 @@ class StrategyOver25:
             self.daily_profit       = 0.0
             self.daily_losses       = 0.0
             self.consecutive_losses = 0
+            self.bets_placed_today   = 0
             self._markets_checked_today.clear()
         if self.consecutive_losses >= 3:
             logger.warning("3 derrotas consecutivas. Pausando 2 horas.")
