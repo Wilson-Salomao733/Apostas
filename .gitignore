@@ -15,6 +15,9 @@ build/
 config.ini
 bot_config.ini
 session_token.txt
+config_erica.ini
+bot_config_erica.ini
+session_token_erica.txt
 
 # Certificados e chaves privadas
 certs/*.crt
@@ -40,10 +43,12 @@ RElatório/
 
 # Logs
 logs/
+logs_erica/
 *.log
 
 # Banco de dados
 data/
+data_erica/
 *.db
 *.db-journal
 *.sqlite

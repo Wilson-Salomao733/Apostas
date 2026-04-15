@@ -37,6 +37,44 @@ services:
     depends_on:
       - dashboard-api
 
+  # Bot de Trading (Conta Erica)
+  betfair-bot-erica:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: betfair-trading-bot-erica
+    image: betfair-trading-bot:latest
+    restart: unless-stopped
+    volumes:
+      # Certificados
+      - ./certs:/app/certs:ro
+      # Configurações específicas da conta Erica
+      - ./config_erica.ini:/app/config.ini:ro
+      - ./bot_config_erica.ini:/app/bot_config.ini:ro
+      # Token de sessão isolado da conta principal
+      - ./session_token_erica.txt:/app/session_token.txt
+      # Logs isolados
+      - ./logs_erica:/app/logs
+      # Banco de dados/estado isolado
+      - ./data_erica:/app/data
+    environment:
+      - TZ=America/Sao_Paulo
+      - PYTHONUNBUFFERED=1
+      # Desabilitar proxy herdado do host
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+    labels:
+      - "com.docker.compose.project=betfair-trading"
+      - "description=Bot de Trading Betfair - Conta Erica"
+    networks:
+      - betfair-network
+    depends_on:
+      - dashboard-api
+
   # Dashboard API
   dashboard-api:
     build:
