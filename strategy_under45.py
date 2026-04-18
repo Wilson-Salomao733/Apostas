@@ -71,6 +71,7 @@ class StrategyUnder45:
         self.max_odds         = float(config.get("under45", "max_odds",            fallback="1.45"))
         self.min_confidence   = int(config.get("under45",   "min_confidence",      fallback="70"))
         self.max_concurrent   = int(config.get("under45",   "max_concurrent_bets", fallback="4"))
+        self.require_stats    = config.getboolean("under45", "require_stats",       fallback=True)
         self.daily_loss_limit = float(config.get("under45", "daily_loss_limit",    fallback="80.0"))
         self.daily_profit_tgt = float(config.get("under45", "daily_profit_target", fallback="80.0"))
 
@@ -84,7 +85,9 @@ class StrategyUnder45:
         logger.info(
             f"[Under45] Estratégia inicializada | "
             f"Stake: R${self.stake} | Odds: {self.min_odds}–{self.max_odds} | "
-            f"Confiança mín.: {self.min_confidence}% | Max concorrentes: {self.max_concurrent}"
+            f"Confiança mín.: {self.min_confidence}% | "
+            f"Max concorrentes: {'sem limite' if self.max_concurrent <= 0 else self.max_concurrent} | "
+            f"Exigir stats: {'sim' if self.require_stats else 'não'}"
         )
 
     # ─── Limites ──────────────────────────────────────────────────────────────
@@ -126,7 +129,7 @@ class StrategyUnder45:
 
         self._monitor_active_bets()
 
-        if self._count_active() >= self.max_concurrent:
+        if self.max_concurrent > 0 and self._count_active() >= self.max_concurrent:
             logger.info(f"[Under45] Máximo de apostas ativas ({self.max_concurrent}).")
             return
 
@@ -136,7 +139,7 @@ class StrategyUnder45:
             return
 
         for mkt in markets:
-            if self._count_active() >= self.max_concurrent:
+            if self.max_concurrent > 0 and self._count_active() >= self.max_concurrent:
                 break
             if not self._check_limits():
                 break
@@ -223,6 +226,15 @@ class StrategyUnder45:
             away_stats = self.api_football.extract_goals_stats(as_) if as_ else {}
             h2h = self.api_football.extract_h2h_summary(h2r, hid, aid)
             has_stats = bool(home_stats and away_stats)
+
+        if self.require_stats and not has_stats:
+            logger.info(
+                f"[Under45] {home} x {away} sem dados suficientes (API-Football). "
+                "Aposta bloqueada."
+            )
+            if event_id:
+                self._checked_events.add(event_id)
+            return
 
         # Rejeita rápido se média histórica combinada > 3.6 gols (muito perto de 4.5)
         if has_stats:
