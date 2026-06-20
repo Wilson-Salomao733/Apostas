@@ -133,7 +133,7 @@ def format_prices(scheduled: bool = False) -> str:
         lines.append(f"Total: ~${total_usd:,.2f} / R$ {total_brl:,.2f}")
     else:
         lines.append("  (vazio ou indisponível — GitHub bloqueia API Binance)")
-    lines.append("\n👇 <i>Botões respondem em até ~5 min</i>")
+    lines.append("\n👇 <i>Atualização automática — use o bot no PC para resposta na hora</i>")
     return "\n".join(lines)
 
 
@@ -315,7 +315,7 @@ def dispatch(chat_id: str, action: str) -> None:
             "🔍 Varredura Apostas\n"
             "🟢 Comprar / 🔴 Vender BTC\n"
             "💰 Saldo Betfair\n\n"
-            "<i>Botões respondem em até ~5 min</i>",
+            "<i>Hub local no PC — resposta instantânea</i>",
             MAIN_INLINE,
         )
     elif action == "crypto_prices":
