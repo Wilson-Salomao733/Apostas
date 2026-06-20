@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
-CURRENT_SEASON = 2025
+CURRENT_SEASON = 2026
 SOCCER_EVENT_TYPE_ID = "1"
 
 GOOD_LEAGUES = {
@@ -48,9 +48,9 @@ SCAN_PROFILES = [
         "label": "Under 4.5 Gols",
         "market_type": "OVER_UNDER_45",
         "selection_hint": "under",
-        "min_odds": 1.25,
-        "max_odds": 1.42,
-        "min_confidence": 72,
+        "min_odds": 1.20,
+        "max_odds": 1.48,
+        "min_confidence": 65,
         "risk": "baixo",
         "prompt_goal": "MENOS de 4,5 gols (máximo 4 gols no jogo)",
     },
@@ -61,7 +61,7 @@ SCAN_PROFILES = [
         "selection_hint": "over",
         "min_odds": 1.25,
         "max_odds": 1.55,
-        "min_confidence": 70,
+        "min_confidence": 65,
         "risk": "baixo",
         "prompt_goal": "MAIS de 1,5 gols (pelo menos 2 gols no jogo)",
     },
@@ -116,15 +116,16 @@ class Opportunity:
         return asdict(self)
 
 
-def _league_ok(league: str) -> bool:
+def _league_tier(league: str) -> str:
+    """good = ligas principais | unknown = aceita com IA mais exigente | blocked = rejeita."""
     name = league.lower()
     for kw in BLOCKED_KEYWORDS:
         if kw in name:
-            return False
+            return "blocked"
     for good in GOOD_LEAGUES:
         if good in name:
-            return True
-    return False
+            return "good"
+    return "unknown"
 
 
 def _parse_teams(event_name: str) -> Tuple[str, str]:
@@ -148,39 +149,66 @@ class OpportunityScanner:
         self.api_football = api_football
         self.groq_key = groq_key
         self.stake = stake
-        self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "12"))
-        self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "6"))
+        self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "15"))
+        self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "8"))
+        self.last_stats: dict = {}
+        self._near_misses: List[Opportunity] = []
 
     def scan(self) -> List[Opportunity]:
         logger.info("Iniciando varredura multi-mercado...")
         candidates: List[Opportunity] = []
+        self._near_misses = []
+        stats = {
+            "markets_total": 0,
+            "blocked_league": 0,
+            "wrong_odds": 0,
+            "ia_rejected": 0,
+            "ia_analyzed": 0,
+        }
 
         for profile in SCAN_PROFILES:
             try:
-                found = self._scan_profile(profile)
+                found, partial = self._scan_profile(profile)
                 candidates.extend(found)
+                for k, v in partial.items():
+                    stats[k] = stats.get(k, 0) + v
                 logger.info(f"[{profile['label']}] {len(found)} oportunidade(s) aprovada(s)")
             except Exception as e:
                 logger.error(f"Erro no perfil {profile['key']}: {e}")
-            time.sleep(0.5)
+            time.sleep(0.3)
 
-        candidates.sort(key=lambda o: (o.confidence, o.potential_profit / max(o.stake, 1)), reverse=True)
+        candidates.sort(
+            key=lambda o: (
+                0 if _league_tier(o.league) == "good" else 1,
+                -o.confidence,
+                -o.potential_profit,
+            ),
+        )
         results = candidates[: self.max_results]
+        if not results and self._near_misses:
+            self._near_misses.sort(key=lambda o: -o.confidence)
+            results = self._near_misses[:3]
+            stats["fallback"] = len(results)
+        stats["approved"] = len(results)
+        self.last_stats = stats
         self._save_pending(results)
-        logger.info(f"Varredura concluída: {len(results)} oportunidade(s) enviáveis")
+        logger.info(f"Varredura concluída: {len(results)} oportunidade(s) | stats={stats}")
         return results
 
-    def _scan_profile(self, profile: dict) -> List[Opportunity]:
+    def _scan_profile(self, profile: dict) -> tuple[List[Opportunity], dict]:
         markets = self._fetch_markets(profile["market_type"])
         approved: List[Opportunity] = []
+        partial = {"markets_total": len(markets)}
 
         for mkt in markets[: self.max_per_profile]:
-            opp = self._evaluate_market(mkt, profile)
+            opp, reason = self._evaluate_market(mkt, profile)
             if opp:
                 approved.append(opp)
-            time.sleep(0.8)
+            elif reason:
+                partial[reason] = partial.get(reason, 0) + 1
+            time.sleep(0.5)
 
-        return approved
+        return approved, partial
 
     def _fetch_markets(self, market_type: str) -> List[dict]:
         now = datetime.now(timezone.utc)
@@ -191,7 +219,7 @@ class OpportunityScanner:
                     "marketTypeCodes": [market_type],
                     "marketStartTime": {
                         "from": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "to": (now + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "to": (now + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     },
                 },
                 market_projection=[
@@ -204,28 +232,29 @@ class OpportunityScanner:
             logger.error(f"Erro ao buscar {market_type}: {e}")
             return []
 
-    def _evaluate_market(self, mkt: dict, profile: dict) -> Optional[Opportunity]:
+    def _evaluate_market(self, mkt: dict, profile: dict) -> tuple[Optional[Opportunity], Optional[str]]:
         event = mkt.get("event", {})
         comp = mkt.get("competition", {})
         league = comp.get("name", "")
-        if not _league_ok(league):
-            return None
+        tier = _league_tier(league)
+        if tier == "blocked":
+            return None, "blocked_league"
 
         home, away = _parse_teams(event.get("name", ""))
         if not home or not away:
-            return None
+            return None, None
 
         book = self._get_book(mkt["marketId"])
         if not book:
-            return None
+            return None, None
 
         selection = self._pick_selection(mkt, book, profile)
         if not selection:
-            return None
+            return None, None
 
         sel_id, sel_label, odds = selection
         if not (profile["min_odds"] <= odds <= profile["max_odds"]):
-            return None
+            return None, "wrong_odds"
 
         home_stats, away_stats, h2h, has_stats = self._get_stats(home, away)
         analysis = self._analyze_groq(
@@ -241,15 +270,30 @@ class OpportunityScanner:
             has_stats=has_stats,
         )
         if not analysis:
-            return None
+            return None, "ia_rejected"
 
         confidence = int(analysis.get("confidence", 0))
-        min_conf = profile["min_confidence"] + (5 if not has_stats else 0)
+        extra = 5 if not has_stats else 0
+        if tier == "unknown":
+            extra += 5
+        min_conf = profile["min_confidence"] + extra
         if confidence < min_conf:
-            return None
+            nm = self._near_miss_from(
+                mkt, profile, home, away, league, sel_id, sel_label, odds,
+                confidence, analysis, kickoff=mkt.get("marketStartTime", ""),
+            )
+            if nm and confidence >= 55:
+                self._near_misses.append(nm)
+            return None, "ia_rejected"
 
         if analysis.get("recommend") is False:
-            return None
+            nm = self._near_miss_from(
+                mkt, profile, home, away, league, sel_id, sel_label, odds,
+                confidence, analysis, kickoff=mkt.get("marketStartTime", ""),
+            )
+            if nm and confidence >= 55:
+                self._near_misses.append(nm)
+            return None, "ia_rejected"
 
         kickoff = mkt.get("marketStartTime", "")
         profit = round(self.stake * (odds - 1), 2)
@@ -272,6 +316,31 @@ class OpportunityScanner:
             reasoning=str(analysis.get("reasoning", ""))[:400],
             potential_profit=profit,
             kickoff=kickoff,
+        ), None
+
+    def _near_miss_from(
+        self, mkt, profile, home, away, league, sel_id, sel_label, odds,
+        confidence, analysis, kickoff,
+    ) -> Optional[Opportunity]:
+        reason = str(analysis.get("reasoning", "IA não recomendou"))[:400]
+        profit = round(self.stake * (odds - 1), 2)
+        return Opportunity(
+            opp_id=_make_opp_id(mkt["marketId"], sel_id, profile["key"]),
+            bet_type=f"⚠️ {profile['label']}",
+            bet_key=profile["key"],
+            risk="médio",
+            home=home,
+            away=away,
+            league=league,
+            market_id=mkt["marketId"],
+            selection_id=sel_id,
+            selection_label=sel_label,
+            odds=odds,
+            stake=self.stake,
+            confidence=confidence,
+            reasoning=f"IA cautelosa — revise antes: {reason}",
+            potential_profit=profit,
+            kickoff=kickoff or mkt.get("marketStartTime", ""),
         )
 
     def _pick_selection(

@@ -1,0 +1,57 @@
+name: Telegram Poll
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: pip install requests
+
+      - name: Configurar credenciais Betfair
+        run: |
+          mkdir -p certs data
+          printf '%s' "$CONFIG_INI" > config.ini
+          printf '%s' "$BOT_CONFIG_INI" > bot_config.ini
+          printf '%s' "$CERT_CRT" > certs/client-2048.crt
+          printf '%s' "$CERT_KEY" > certs/client-2048.key
+        env:
+          CONFIG_INI: ${{ secrets.CONFIG_INI }}
+          BOT_CONFIG_INI: ${{ secrets.BOT_CONFIG_INI }}
+          CERT_CRT: ${{ secrets.CERT_CRT }}
+          CERT_KEY: ${{ secrets.CERT_KEY }}
+
+      - name: Restaurar caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/telegram_offset.txt
+            data/pending_opportunities.json
+          key: telegram-state
+
+      - name: Processar Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+        run: python telegram_bot/telegram_poll_once.py
+
+      - name: Salvar caches
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/telegram_offset.txt
+            data/pending_opportunities.json
+          key: telegram-state
