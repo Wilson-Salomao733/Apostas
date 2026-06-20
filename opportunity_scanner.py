@@ -34,6 +34,7 @@ GOOD_LEAGUES = {
     "belgian pro league", "austrian bundesliga", "swiss super league",
     "danish superliga", "allsvenskan", "eliteserien",
     "saudi pro league", "nations league",
+    "copa do mundo", "world cup", "fifa world cup", "copa mundial", "mundial",
 }
 
 BLOCKED_KEYWORDS = {
@@ -153,11 +154,13 @@ class OpportunityScanner:
         self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "8"))
         self.last_stats: dict = {}
         self._near_misses: List[Opportunity] = []
+        self._betfair_error: str | None = None
 
     def scan(self) -> List[Opportunity]:
         logger.info("Iniciando varredura multi-mercado...")
         candidates: List[Opportunity] = []
         self._near_misses = []
+        self._betfair_error = None
         stats = {
             "markets_total": 0,
             "blocked_league": 0,
@@ -190,6 +193,8 @@ class OpportunityScanner:
             results = self._near_misses[:3]
             stats["fallback"] = len(results)
         stats["approved"] = len(results)
+        if stats.get("markets_total", 0) == 0 and self._betfair_error:
+            stats["betfair_error"] = self._betfair_error
         self.last_stats = stats
         self._save_pending(results)
         logger.info(f"Varredura concluída: {len(results)} oportunidade(s) | stats={stats}")
@@ -230,6 +235,7 @@ class OpportunityScanner:
             return markets or []
         except Exception as e:
             logger.error(f"Erro ao buscar {market_type}: {e}")
+            self._betfair_error = str(e)
             return []
 
     def _evaluate_market(self, mkt: dict, profile: dict) -> tuple[Optional[Opportunity], Optional[str]]:

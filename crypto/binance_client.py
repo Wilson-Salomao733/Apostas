@@ -15,6 +15,12 @@ COIN_SYMBOLS = {
     "SOL": "SOLUSDT",
     "USDC": "USDCUSDT",
 }
+COINGECKO_IDS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "USDC": "usd-coin",
+}
 
 
 def get_brl_rate() -> float:
@@ -27,6 +33,26 @@ def get_brl_rate() -> float:
         return 5.70
 
 
+def _prices_coingecko() -> Dict[str, float]:
+    prices: Dict[str, float] = {"USDT": 1.0}
+    try:
+        ids = ",".join(COINGECKO_IDS.values())
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": ids, "vs_currencies": "usd"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        id_to_coin = {v: k for k, v in COINGECKO_IDS.items()}
+        for gecko_id, info in r.json().items():
+            coin = id_to_coin.get(gecko_id)
+            if coin:
+                prices[coin] = float(info["usd"])
+    except Exception as e:
+        print(f"[coingecko] Erro ao buscar preços: {e}")
+    return prices
+
+
 def get_prices() -> Dict[str, float]:
     prices: Dict[str, float] = {"USDT": 1.0}
     try:
@@ -35,9 +61,35 @@ def get_prices() -> Dict[str, float]:
         all_prices = {item["symbol"]: float(item["price"]) for item in r.json()}
         for coin, symbol in COIN_SYMBOLS.items():
             prices[coin] = all_prices.get(symbol, 0.0)
+        if prices.get("BTC", 0) > 0:
+            return prices
     except Exception as e:
         print(f"[binance] Erro ao buscar preços: {e}")
+    fallback = _prices_coingecko()
+    for coin in MONITORED_COINS:
+        if fallback.get(coin, 0) > 0:
+            prices[coin] = fallback[coin]
     return prices
+
+
+def _changes_coingecko() -> Dict[str, float]:
+    changes: Dict[str, float] = {"USDT": 0.0, "USDC": 0.0}
+    try:
+        ids = ",".join(COINGECKO_IDS.values())
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": ids, "vs_currencies": "usd", "include_24hr_change": "true"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        id_to_coin = {v: k for k, v in COINGECKO_IDS.items()}
+        for gecko_id, info in r.json().items():
+            coin = id_to_coin.get(gecko_id)
+            if coin:
+                changes[coin] = float(info.get("usd_24h_change", 0))
+    except Exception as e:
+        print(f"[coingecko] Erro ao buscar variações: {e}")
+    return changes
 
 
 def get_24h_changes() -> Dict[str, float]:
@@ -51,13 +103,17 @@ def get_24h_changes() -> Dict[str, float]:
             timeout=10,
         )
         r.raise_for_status()
+        got = False
         for item in r.json():
             coin = reverse_map.get(item["symbol"])
             if coin:
                 changes[coin] = float(item["priceChangePercent"])
+                got = True
+        if got:
+            return changes
     except Exception as e:
         print(f"[binance] Erro ao buscar variações 24h: {e}")
-    return changes
+    return _changes_coingecko()
 
 
 def get_balance() -> Dict[str, float]:

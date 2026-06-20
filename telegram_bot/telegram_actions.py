@@ -116,15 +116,35 @@ def format_prices(scheduled: bool = False) -> str:
     header = "📊 <b>Preços Crypto</b>"
     if scheduled:
         header += " — atualização automática"
-    lines = [header, f"🕐 {now}", f"💱 1 USD = R$ {brl:.2f}", ""]
+    lines = [header, f"🕐 {now}", f"💱 1 USD = R$ {brl:.2f}", "", "<b>📈 Cotação de mercado</b>"]
     for coin in ["BTC", "ETH", "SOL", "USDT", "USDC"]:
         p = prices.get(coin, 0)
         ch = changes.get(coin, 0)
         arrow = "🔴" if ch < 0 else "🟢"
         lines.append(f"{arrow} <b>{coin}</b>: ${p:,.2f} (R$ {p * brl:,.2f}) {ch:+.2f}%")
-    lines.append(f"\n💼 Total: ~${total_usd:,.2f} / R$ {total_brl:,.2f}")
+    lines.append("")
+    lines.append("<b>💼 Seu saldo Binance</b>")
+    if balance:
+        for coin in ["BTC", "ETH", "SOL", "USDT", "USDC"]:
+            q = balance.get(coin, 0)
+            if q > 0:
+                val = q * prices.get(coin, 0)
+                lines.append(f"  {coin}: {q:.6g} (~${val:,.2f})")
+        lines.append(f"Total: ~${total_usd:,.2f} / R$ {total_brl:,.2f}")
+    else:
+        lines.append("  (vazio ou indisponível — GitHub bloqueia API Binance)")
     lines.append("\n👇 <i>Botões respondem em até ~5 min</i>")
     return "\n".join(lines)
+
+
+def _betfair_geo_hint(err: str) -> str | None:
+    if any(x in err.upper() for x in ("RESTRICTED_LOCATION", "RE-LOGIN", "RELOGIN")):
+        if os.getenv("GITHUB_ACTIONS") == "true":
+            return (
+                "⚠️ <b>Betfair bloqueada no GitHub Actions</b>\n"
+                "Servidores nos EUA — use o hub no seu PC para apostas/saldo."
+            )
+    return None
 
 
 def _stake() -> float:
@@ -149,19 +169,35 @@ def run_scan(chat_id: str) -> None:
     send(chat_id, "🔍 <b>Varredura iniciada</b>\nAnalisando jogos (~1–3 min)...")
     os.chdir(ROOT)
     fk, gk = _apostas_keys()
-    scanner = OpportunityScanner(_betfair(), APIFootball(fk), gk, stake=_stake())
-    opps = scanner.scan()
-    stats = scanner.last_stats
+    try:
+        scanner = OpportunityScanner(_betfair(), APIFootball(fk), gk, stake=_stake())
+        opps = scanner.scan()
+        stats = scanner.last_stats
+    except Exception as e:
+        hint = _betfair_geo_hint(str(e))
+        send(chat_id, hint or f"❌ Erro na varredura: {e}", MAIN_INLINE)
+        return
 
     if not opps:
         mkts = stats.get("markets_total", 0)
-        send(
-            chat_id,
+        err = stats.get("betfair_error", "")
+        if err:
+            hint = _betfair_geo_hint(err)
+            send(chat_id, hint or f"❌ Betfair: {err}", MAIN_INLINE)
+            return
+        msg = (
             "😴 <b>Nenhuma oportunidade aprovada.</b>\n\n"
             f"Mercados analisados: ~{mkts}\n"
-            "Tente de novo perto de jogos de ligas principais.",
-            MAIN_INLINE,
         )
+        if mkts == 0:
+            msg += (
+                "\nEm época de Copa do Mundo, ligas nacionais param — "
+                "só jogos da Copa aparecem na Betfair.\n"
+                "A varredura já inclui Copa do Mundo."
+            )
+        else:
+            msg += "Nenhum jogo passou nos filtros (odd + IA)."
+        send(chat_id, msg, MAIN_INLINE)
         return
 
     note = " (⚠️ candidatos — IA cautelosa)" if stats.get("fallback") else ""
@@ -238,7 +274,8 @@ def betfair_balance(chat_id: str) -> None:
             MAIN_INLINE,
         )
     except Exception as e:
-        send(chat_id, f"❌ {e}", MAIN_INLINE)
+        hint = _betfair_geo_hint(str(e))
+        send(chat_id, hint or f"❌ {e}", MAIN_INLINE)
 
 
 def confirm_crypto(chat_id: str, action: str) -> None:
