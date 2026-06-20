@@ -34,7 +34,7 @@ GOOD_LEAGUES = {
     "belgian pro league", "austrian bundesliga", "swiss super league",
     "danish superliga", "allsvenskan", "eliteserien",
     "saudi pro league", "nations league",
-    "copa do mundo", "world cup", "fifa world cup", "copa mundial", "mundial",
+    "copa do mundo", "world cup", "fifa world cup", "copa mundial", "mundial", "fifa",
 }
 
 BLOCKED_KEYWORDS = {
@@ -117,6 +117,11 @@ class Opportunity:
         return asdict(self)
 
 
+def _is_world_cup(league: str) -> bool:
+    name = league.lower()
+    return any(x in name for x in ("world cup", "fifa", "mundial", "copa do mundo"))
+
+
 def _league_tier(league: str) -> str:
     """good = ligas principais | unknown = aceita com IA mais exigente | blocked = rejeita."""
     name = league.lower()
@@ -150,7 +155,7 @@ class OpportunityScanner:
         self.api_football = api_football
         self.groq_key = groq_key
         self.stake = stake
-        self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "15"))
+        self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "35"))
         self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "8"))
         self.last_stats: dict = {}
         self._near_misses: List[Opportunity] = []
@@ -182,6 +187,7 @@ class OpportunityScanner:
 
         candidates.sort(
             key=lambda o: (
+                0 if _is_world_cup(o.league) else 1,
                 0 if _league_tier(o.league) == "good" else 1,
                 -o.confidence,
                 -o.potential_profit,
@@ -200,10 +206,32 @@ class OpportunityScanner:
         logger.info(f"Varredura concluída: {len(results)} oportunidade(s) | stats={stats}")
         return results
 
+    def _prioritize_markets(self, markets: List[dict]) -> List[dict]:
+        """Copa do Mundo e ligas principais primeiro — Betfair ordena por horário."""
+        def sort_key(m: dict) -> tuple:
+            league = m.get("competition", {}).get("name", "")
+            tier = _league_tier(league)
+            tier_order = {"good": 0, "unknown": 1, "blocked": 2}.get(tier, 1)
+            wc = 0 if _is_world_cup(league) else 1
+            return (tier_order, wc, m.get("marketStartTime", ""))
+
+        return sorted(markets, key=sort_key)
+
+    def _odds_range(self, profile: dict, league: str) -> tuple[float, float]:
+        min_o, max_o = profile["min_odds"], profile["max_odds"]
+        # Under 4.5 na Copa costuma pagar 1.08–1.18 (odd baixa, mas segura)
+        if profile["key"] == "under45" and _is_world_cup(league):
+            min_o = min(min_o, 1.08)
+        return min_o, max_o
+
     def _scan_profile(self, profile: dict) -> tuple[List[Opportunity], dict]:
-        markets = self._fetch_markets(profile["market_type"])
+        markets = self._prioritize_markets(self._fetch_markets(profile["market_type"]))
         approved: List[Opportunity] = []
-        partial = {"markets_total": len(markets)}
+        wc_count = sum(
+            1 for m in markets
+            if _is_world_cup(m.get("competition", {}).get("name", ""))
+        )
+        partial = {"markets_total": len(markets), "world_cup_markets": wc_count}
 
         for mkt in markets[: self.max_per_profile]:
             opp, reason = self._evaluate_market(mkt, profile)
@@ -259,7 +287,8 @@ class OpportunityScanner:
             return None, None
 
         sel_id, sel_label, odds = selection
-        if not (profile["min_odds"] <= odds <= profile["max_odds"]):
+        min_o, max_o = self._odds_range(profile, league)
+        if not (min_o <= odds <= max_o):
             return None, "wrong_odds"
 
         home_stats, away_stats, h2h, has_stats = self._get_stats(home, away)
