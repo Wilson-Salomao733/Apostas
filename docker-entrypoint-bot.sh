@@ -42,4 +42,4 @@ echo "=========================================="
 echo ""
 
 # Executar o bot
-exec python betfair_bot.py
+exec python manual_bot.py
