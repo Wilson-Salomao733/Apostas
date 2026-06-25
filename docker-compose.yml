@@ -1,0 +1,15 @@
+services:
+  apostas-bot:
+    build: .
+    container_name: apostas-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.ini:/app/config.ini:ro
+      - ./bot_config.ini:/app/bot_config.ini:ro
+      - ./certs:/app/certs:ro
+      - ./data:/app/data
+      - ./session_token.txt:/app/session_token.txt
+    environment:
+      - TZ=America/Sao_Paulo

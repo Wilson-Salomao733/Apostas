@@ -229,6 +229,27 @@ class APIFootball:
             logger.warning(f"Erro ao extrair stats de gols: {e}")
             return {}
 
+    def extract_corners_stats(self, team_stats: dict) -> dict:
+        """Extrai médias de escanteios quando disponíveis nas estatísticas do time."""
+        if not team_stats:
+            return {}
+        try:
+            corners = team_stats.get("corners", {})
+            for_data = corners.get("for", {})
+            against_data = corners.get("against", {})
+            avg_for = float(for_data.get("average", {}).get("total") or 0)
+            avg_against = float(against_data.get("average", {}).get("total") or 0)
+            if avg_for <= 0 and avg_against <= 0:
+                return {}
+            return {
+                "avg_for": round(avg_for, 2),
+                "avg_against": round(avg_against, 2),
+                "avg_total": round(avg_for + avg_against, 2),
+            }
+        except Exception as e:
+            logger.warning(f"Erro ao extrair stats de escanteios: {e}")
+            return {}
+
     def extract_h2h_summary(self, h2h_fixtures: List[dict], team1_id: int, team2_id: int) -> dict:
         """Resume histórico de H2H focando em gols."""
         if not h2h_fixtures:

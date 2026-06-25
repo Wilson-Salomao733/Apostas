@@ -1,5 +1,2 @@
 requests>=2.31.0
-streamlit>=1.28.0
-pandas>=2.0.0
-flask
-flask-cors
+python-telegram-bot>=21.0
