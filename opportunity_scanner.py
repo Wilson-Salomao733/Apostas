@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 
 from api_football import APIFootball
-from config_loader import PROFILE_DEFAULTS, build_scan_profiles, get_manual_stake, get_strategy_params
+from config_loader import build_scan_profiles, get_manual_stake
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,6 @@ class OpportunityScanner:
         self.groq_key = groq_key
         self.stake = stake if stake is not None else get_manual_stake()
         self.active_strategy = active_strategy
-        self.enabled_sports = enabled_sports
         self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "35"))
         self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "8"))
         self.last_stats: dict = {}
@@ -139,8 +138,8 @@ class OpportunityScanner:
         self._betfair_error: str | None = None
 
     def scan(self) -> List[Opportunity]:
-        profiles = build_scan_profiles(self.active_strategy, self.enabled_sports)
-        logger.info("Iniciando varredura (%d perfil/is)...", len(profiles))
+        profiles = build_scan_profiles(self.active_strategy)
+        logger.info("Iniciando varredura de múltiplas (%d tipo(s))...", len(profiles))
         candidates: List[Opportunity] = []
         self._near_misses = []
         self._betfair_error = None
@@ -158,10 +157,7 @@ class OpportunityScanner:
             old_stake = self.stake
             self.stake = profile_stake
             try:
-                if profile["key"] == "combo_u45_u85":
-                    found, partial = self._scan_combo_u45_u85(profile)
-                else:
-                    found, partial = self._scan_profile(profile)
+                found, partial = self._scan_combo(profile)
                 candidates.extend(found)
                 for k, v in partial.items():
                     stats[k] = stats.get(k, 0) + v
@@ -210,43 +206,42 @@ class OpportunityScanner:
             min_o = min(min_o, 1.08)
         return min_o, max_o
 
-    def _scan_combo_u45_u85(self, profile: dict) -> tuple[List[Opportunity], dict]:
-        """Múltipla mesmo jogo: Under 4.5 gols + Under 8.5 escanteios."""
-        goals_profile = {**PROFILE_DEFAULTS["under45"], **get_strategy_params("under45")}
-        corners_profile = {**PROFILE_DEFAULTS["corners_85"], **get_strategy_params("corners_85")}
-        min_combined = float(profile.get("min_combined_odds", 1.55))
-        max_combined = float(profile.get("max_combined_odds", 2.40))
+    def _scan_combo(self, profile: dict) -> tuple[List[Opportunity], dict]:
+        """Múltipla mesmo jogo — duas pernas em mercados diferentes."""
+        leg1 = profile["leg1_profile"]
+        leg2 = profile["leg2_profile"]
+        min_combined = float(profile.get("min_combined_odds", 1.70))
+        max_combined = float(profile.get("max_combined_odds", 3.00))
         min_conf = int(profile.get("min_confidence", 72))
 
-        goals_markets = self._prioritize_markets(
-            self._fetch_markets("OVER_UNDER_45", "1"), "football",
+        primary_markets = self._prioritize_markets(
+            self._fetch_markets(leg1["market_type"], "1"), "football",
         )
-        corners_markets = self._fetch_markets("OVER_UNDER_85_CORNR", "1")
-        corners_by_event: Dict[str, dict] = {}
-        for m in corners_markets:
+        secondary_markets = self._fetch_markets(leg2["market_type"], "1")
+        secondary_by_event: Dict[str, dict] = {}
+        for m in secondary_markets:
             eid = str(m.get("event", {}).get("id", ""))
             if eid:
-                corners_by_event[eid] = m
+                secondary_by_event[eid] = m
 
         approved: List[Opportunity] = []
-        partial = {"markets_total": len(goals_markets), "combo_checked": 0}
+        partial = {"markets_total": len(primary_markets), "combo_checked": 0}
 
-        for mkt in goals_markets[: self.max_per_profile]:
-            league = mkt.get("competition", {}).get("name", "")
+        for mkt1 in primary_markets[: self.max_per_profile]:
+            league = mkt1.get("competition", {}).get("name", "")
             if profile.get("good_league_only") and _league_tier(league, "football") != "good":
                 partial["blocked_league"] = partial.get("blocked_league", 0) + 1
                 continue
 
-            eid = str(mkt.get("event", {}).get("id", ""))
-            cmkt = corners_by_event.get(eid)
-            if not cmkt:
-                partial["no_corners_market"] = partial.get("no_corners_market", 0) + 1
+            eid = str(mkt1.get("event", {}).get("id", ""))
+            mkt2 = secondary_by_event.get(eid)
+            if not mkt2:
+                partial["no_leg2_market"] = partial.get("no_leg2_market", 0) + 1
                 continue
 
             partial["combo_checked"] = partial.get("combo_checked", 0) + 1
             opp = self._evaluate_combo(
-                mkt, cmkt, goals_profile, corners_profile, profile,
-                min_combined, max_combined, min_conf,
+                mkt1, mkt2, leg1, leg2, profile, min_combined, max_combined, min_conf,
             )
             if opp:
                 approved.append(opp)
@@ -255,48 +250,51 @@ class OpportunityScanner:
         return approved, partial
 
     def _evaluate_combo(
-        self, goals_mkt, corners_mkt, goals_profile, corners_profile, combo_profile,
+        self, mkt1, mkt2, leg1, leg2, combo_profile,
         min_combined, max_combined, min_conf,
     ) -> Optional[Opportunity]:
-        event = goals_mkt.get("event", {})
-        league = goals_mkt.get("competition", {}).get("name", "")
+        event = mkt1.get("event", {})
+        league = mkt1.get("competition", {}).get("name", "")
         home, away = _parse_participants(event.get("name", ""))
         if not home or not away:
             return None
 
-        g_book = self._get_book(goals_mkt["marketId"])
-        c_book = self._get_book(corners_mkt["marketId"])
-        if not g_book or not c_book:
+        book1 = self._get_book(mkt1["marketId"])
+        book2 = self._get_book(mkt2["marketId"])
+        if not book1 or not book2:
             return None
 
-        min_vol = combo_profile.get("min_volume", 3000)
-        if float(g_book.get("totalMatched", 0) or 0) < min_vol:
+        min_vol = float(combo_profile.get("min_volume", 3000))
+        if float(book1.get("totalMatched", 0) or 0) < min_vol:
             return None
-        if float(c_book.get("totalMatched", 0) or 0) < min_vol:
-            return None
-
-        g_sel = self._pick_selection(goals_mkt, g_book, goals_profile)
-        c_sel = self._pick_selection(corners_mkt, c_book, corners_profile)
-        if not g_sel or not c_sel:
+        if float(book2.get("totalMatched", 0) or 0) < min_vol:
             return None
 
-        g_id, g_label, g_odds = g_sel
-        c_id, c_label, c_odds = c_sel
-        min_g, max_g = self._odds_range(goals_profile, league)
-        min_c, max_c = self._odds_range(corners_profile, league)
-        if not (min_g <= g_odds <= max_g and min_c <= c_odds <= max_c):
+        sel1 = self._pick_selection(mkt1, book1, leg1)
+        sel2 = self._pick_selection(mkt2, book2, leg2)
+        if not sel1 or not sel2:
             return None
 
-        combined = round(g_odds * c_odds, 3)
+        id1, label1, odds1 = sel1
+        id2, label2, odds2 = sel2
+        min1, max1 = self._odds_range(leg1, league)
+        min2, max2 = self._odds_range(leg2, league)
+        if not (min1 <= odds1 <= max1 and min2 <= odds2 <= max2):
+            return None
+
+        combined = round(odds1 * odds2, 3)
         if not (min_combined <= combined <= max_combined):
             return None
 
+        needs_corners = combo_profile.get("needs_corners_stats", False)
         home_stats, away_stats, h2h, has_stats, corner_stats = self._get_stats(
-            home, away, "combo_u45_u85",
+            home, away, needs_corners,
         )
         analysis = self._analyze_groq_combo(
-            home, away, league, g_odds, c_odds, combined,
-            home_stats, away_stats, h2h, corner_stats, has_stats,
+            combo_profile, home, away, league,
+            combo_profile["leg1_short"], odds1,
+            combo_profile["leg2_short"], odds2,
+            combined, home_stats, away_stats, h2h, corner_stats, has_stats,
         )
         if not analysis:
             return None
@@ -308,48 +306,50 @@ class OpportunityScanner:
 
         stake = float(combo_profile.get("stake", self.stake))
         profit = round(stake * (combined - 1) * 0.95, 2)
+        key = combo_profile["key"]
         legs = [
             {
-                "key": "goals",
-                "market_id": goals_mkt["marketId"],
-                "selection_id": g_id,
-                "odds": g_odds,
-                "label": f"U4.5 gols @ {g_odds:.2f}",
+                "key": "leg1",
+                "market_id": mkt1["marketId"],
+                "selection_id": id1,
+                "odds": odds1,
+                "label": f"{combo_profile['leg1_short']} @ {odds1:.2f}",
             },
             {
-                "key": "corners",
-                "market_id": corners_mkt["marketId"],
-                "selection_id": c_id,
-                "odds": c_odds,
-                "label": f"U8.5 esc @ {c_odds:.2f}",
+                "key": "leg2",
+                "market_id": mkt2["marketId"],
+                "selection_id": id2,
+                "odds": odds2,
+                "label": f"{combo_profile['leg2_short']} @ {odds2:.2f}",
             },
         ]
-        opp_id = _make_opp_id(goals_mkt["marketId"], c_id, "combo_u45_u85")
+        opp_id = _make_opp_id(mkt1["marketId"], id2, key)
 
         return Opportunity(
             opp_id=opp_id,
-            bet_type=combo_profile.get("label", "Múltipla U4.5 + U8.5 esc"),
-            bet_key="combo_u45_u85",
+            bet_type=combo_profile["label"],
+            bet_key=key,
             risk="médio",
             home=home,
             away=away,
             league=league,
-            market_id=goals_mkt["marketId"],
-            selection_id=g_id,
-            selection_label=f"U4.5 @ {g_odds:.2f} × U8.5 esc @ {c_odds:.2f}",
+            market_id=mkt1["marketId"],
+            selection_id=id1,
+            selection_label=f"{combo_profile['leg1_short']} @ {odds1:.2f} × {combo_profile['leg2_short']} @ {odds2:.2f}",
             odds=combined,
             combined_odds=combined,
             stake=stake,
             confidence=confidence,
             reasoning=str(analysis.get("reasoning", ""))[:400],
             potential_profit=profit,
-            kickoff=goals_mkt.get("marketStartTime", ""),
+            kickoff=mkt1.get("marketStartTime", ""),
             sport="football",
             legs=legs,
         )
 
     def _analyze_groq_combo(
-        self, home, away, league, g_odds, c_odds, combined,
+        self, combo_profile, home, away, league,
+        leg1_name, odds1, leg2_name, odds2, combined,
         home_stats, away_stats, h2h, corner_stats, has_stats,
     ) -> Optional[dict]:
         if not self.groq_key:
@@ -373,17 +373,18 @@ class OpportunityScanner:
                 f"{away}: {ac.get('avg_total', '?')}\n"
             )
 
-        prompt = f"""Analise esta MÚLTIPLA no mesmo jogo de futebol (as duas seleções devem bater):
+        prompt = f"""Analise esta MÚLTIPLA no mesmo jogo (as duas seleções devem bater):
 
 JOGO: {home} x {away}
 LIGA: {league}
-PERNA 1: Menos de 4,5 gols @ {g_odds}
-PERNA 2: Menos de 8,5 escanteios @ {c_odds}
+MÚLTIPLA: {combo_profile['label']}
+PERNA 1: {leg1_name} @ {odds1}
+PERNA 2: {leg2_name} @ {odds2}
 ODD COMBINADA: {combined}
 
 {stats_block}
+{combo_profile.get('ia_hint', '')}
 
-Jogos com poucos gols costumam ter menos escanteios — avalie correlação.
 Só recommend=true se AMBAS as pernas forem razoáveis e a odd combinada compensar o risco.
 
 JSON:
@@ -478,7 +479,7 @@ JSON:
             has_stats = False
         else:
             home_stats, away_stats, h2h, has_stats, corner_stats = self._get_stats(
-                home, away, profile["key"],
+                home, away, "corners" in profile.get("key", ""),
             )
             if profile.get("require_stats") and not has_stats:
                 return None, "ia_rejected"
@@ -599,6 +600,10 @@ JSON:
                 target_id = rd.get("selectionId")
                 target_label = rd.get("runnerName", "Over")
                 break
+            if hint == "no" and nm in ("no", "não", "nao"):
+                target_id = rd.get("selectionId")
+                target_label = rd.get("runnerName", "No")
+                break
 
         if not target_id:
             return None
@@ -633,7 +638,7 @@ JSON:
                     best = (sel_id, name, price)
         return best
 
-    def _get_stats(self, home: str, away: str, profile_key: str):
+    def _get_stats(self, home: str, away: str, needs_corners: bool = False):
         home_stats, away_stats, h2h = {}, {}, {}
         corner_stats = {}
         has_stats = False
@@ -651,7 +656,7 @@ JSON:
         away_stats = self.api_football.extract_goals_stats(as_) if as_ else {}
         h2h = self.api_football.extract_h2h_summary(h2r, hid, aid)
         has_stats = bool(home_stats and away_stats)
-        if profile_key in ("corners_105", "corners_85", "combo_u45_u85") and hs and as_:
+        if needs_corners and hs and as_:
             corner_stats = {
                 "home": self.api_football.extract_corners_stats(hs),
                 "away": self.api_football.extract_corners_stats(as_),

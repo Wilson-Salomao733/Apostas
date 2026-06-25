@@ -14,6 +14,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from auto_worker import AutoWorker
@@ -22,12 +24,12 @@ from bet_placement import place_opportunity
 from config_loader import (
     VALID_MODES,
     VALID_STRATEGIES,
+    combo_label,
     get_active_strategy,
     get_telegram_creds,
-    load_enabled_sports,
     load_mode,
+    resolve_combo_key,
     save_mode,
-    toggle_sport,
 )
 from opportunity_scanner import Opportunity, OpportunityScanner
 from risk_manager import can_bet, status_summary
@@ -70,24 +72,12 @@ def _mode_label(mode: str) -> str:
 
 
 def _strategy_label(key: str) -> str:
-    labels = {
-        "under45": "Under 4.5",
-        "over15": "Over 1.5",
-        "over25": "Over 2.5",
-        "favorite": "Favorito",
-        "corners_85": "Esc U8.5",
-        "corners_105": "Esc U10.5",
-        "combo_u45_u85": "Múltipla U4.5+Esc",
-        "tennis_match": "Tênis ML",
-        "tennis_games": "Tênis Games",
-    }
-    return labels.get(key, key)
+    return combo_label(resolve_combo_key(key))
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
-    mode = load_mode()
     strategy = get_active_strategy()
-    sports = load_enabled_sports()
+    strat_btn = "all_combos" if strategy == "all_combos" else strategy
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔍 Varredura", callback_data="scan"),
@@ -105,42 +95,31 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⏹ Parar", callback_data="mode:off"),
         ],
         [
-            InlineKeyboardButton(f"📌 {_strategy_label(strategy)}", callback_data="noop"),
-        ],
-        [
-            InlineKeyboardButton("🎯 Múlt", callback_data="strat:combo_u45_u85"),
-            InlineKeyboardButton("U4.5", callback_data="strat:under45"),
-            InlineKeyboardButton("O1.5", callback_data="strat:over15"),
-        ],
-        [
-            InlineKeyboardButton("O2.5", callback_data="strat:over25"),
-            InlineKeyboardButton("Fav", callback_data="strat:favorite"),
-            InlineKeyboardButton("Esc8.5", callback_data="strat:corners_85"),
-        ],
-        [
-            InlineKeyboardButton("🎾 ML", callback_data="strat:tennis_match"),
-            InlineKeyboardButton("🎾 Games", callback_data="strat:tennis_games"),
-        ],
-        [
             InlineKeyboardButton(
-                f"{'✅' if 'football' in sports else '⚪'} Futebol",
-                callback_data="sport:football",
+                f"📌 {_strategy_label(strat_btn)}",
+                callback_data="noop",
             ),
-            InlineKeyboardButton(
-                f"{'✅' if 'tennis' in sports else '⚪'} Tênis",
-                callback_data="sport:tennis",
-            ),
+        ],
+        [
+            InlineKeyboardButton("🎯 Todas", callback_data="strat:all_combos"),
+            InlineKeyboardButton("U4.5+O8.5", callback_data="strat:combo_u45_o85"),
+        ],
+        [
+            InlineKeyboardButton("U4.5+BTTS❌", callback_data="strat:combo_u45_btts_no"),
+            InlineKeyboardButton("U3.5+O8.5", callback_data="strat:combo_u35_o85"),
+        ],
+        [
+            InlineKeyboardButton("O1.5+O8.5", callback_data="strat:combo_o15_o85"),
+            InlineKeyboardButton("Fav+U4.5", callback_data="strat:combo_fav_u45"),
         ],
     ])
 
 
 MENU_TEXT = (
-    "🤖 <b>Bot de Apostas</b>\n\n"
-    "Apostas <b>reais</b> na Betfair Exchange.\n\n"
-    "🎯 <b>Múltipla</b> (recomendado): Under 4.5 gols + Under 8.5 escanteios\n"
-    "👆 <b>Manual</b> — varre ao clicar\n"
-    "🔔 <b>Semi-auto</b> — notifica e você confirma\n"
-    "🤖 <b>Full auto</b> — aposta sozinho (limites no bot_config.ini)\n"
+    "🤖 <b>Bot de Múltiplas</b> (Betfair Exchange)\n\n"
+    "Só apostas <b>combinadas no mesmo jogo</b> — 2 pernas.\n\n"
+    "🎯 <b>Todas</b> — varre as 5 múltiplas abaixo\n"
+    "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 
 
@@ -155,12 +134,11 @@ def _opp_keyboard(opp: Opportunity) -> InlineKeyboardMarkup:
 
 
 def _format_opp(opp: Opportunity) -> str:
-    icon = "🎾" if opp.bet_key.startswith("tennis") else "⚽"
     risk = {"baixo": "🟢", "médio": "🟡"}.get(opp.risk, "⚪")
     lines = [
         f"{risk} <b>{opp.bet_type}</b>",
         "",
-        f"{icon} <b>{opp.home}</b> x <b>{opp.away}</b>",
+        f"⚽ <b>{opp.home}</b> x <b>{opp.away}</b>",
         f"🏆 {opp.league}",
     ]
     if opp.legs:
@@ -210,7 +188,11 @@ def _sync_notify_opp(opp: Opportunity) -> None:
 
 def _guard(update: Update) -> bool:
     chat = update.effective_chat
-    if not chat or chat.id != _allowed_chat():
+    allowed = _allowed_chat()
+    if not chat:
+        return False
+    if chat.id != allowed:
+        log.warning("Mensagem ignorada — chat_id %s (esperado %s)", chat.id, allowed)
         return False
     return True
 
@@ -250,13 +232,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "status":
-        mode = load_mode()
-        sports = ", ".join(load_enabled_sports())
         text = (
             f"📊 <b>Status</b>\n\n"
-            f"Modo: {_mode_label(mode)}\n"
-            f"Estratégia: {_strategy_label(get_active_strategy())}\n"
-            f"Esportes: {sports}\n\n"
+            f"Modo: {_mode_label(load_mode())}\n"
+            f"Estratégia: {combo_label(get_active_strategy())}\n\n"
             f"{status_summary()}"
         )
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=main_keyboard())
@@ -274,24 +253,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith("strat:"):
-        key = data.split(":", 1)[1]
+        key = resolve_combo_key(data.split(":", 1)[1])
         if key in VALID_STRATEGIES:
             _set_strategy(key)
             await query.edit_message_text(
-                f"Estratégia: <b>{_strategy_label(key)}</b>",
+                f"Estratégia: <b>{combo_label(key)}</b>",
                 parse_mode="HTML",
                 reply_markup=main_keyboard(),
             )
-        return
-
-    if data.startswith("sport:"):
-        sport = data.split(":", 1)[1]
-        current = toggle_sport(sport)
-        await query.edit_message_text(
-            f"Esportes ativos: <b>{', '.join(current)}</b>",
-            parse_mode="HTML",
-            reply_markup=main_keyboard(),
-        )
         return
 
     if data.startswith("bet:"):
@@ -357,9 +326,35 @@ def _place_bet(opp_id: str) -> str:
     return msg
 
 
-async def _post_init(_application: Application) -> None:
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _guard(update):
+        return
+    await cmd_start(update, context)
+
+
+async def _post_init(application: Application) -> None:
     global _main_loop
     _main_loop = asyncio.get_running_loop()
+    chat = _allowed_chat()
+    if not chat:
+        return
+    mode = load_mode()
+    try:
+        await application.bot.send_message(
+            chat_id=chat,
+            text=(
+                f"🤖 <b>Bot de Apostas online</b>\n\n"
+                f"Bot: @betwilson_bot\n"
+                f"Modo: <b>{_mode_label(mode)}</b>\n"
+                f"Estratégia: <b>{_strategy_label(get_active_strategy())}</b>\n\n"
+                f"{MENU_TEXT}"
+            ),
+            parse_mode="HTML",
+            reply_markup=main_keyboard(),
+        )
+        log.info("Mensagem de boas-vindas enviada ao chat %s", chat)
+    except Exception as e:
+        log.error("Falha ao enviar boas-vindas: %s", e)
 
 
 def main() -> None:
@@ -381,9 +376,10 @@ def main() -> None:
     _app.add_handler(CommandHandler("start", cmd_start))
     _app.add_handler(CommandHandler("menu", cmd_start))
     _app.add_handler(CallbackQueryHandler(on_callback))
+    _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-    log.info("Bot de apostas iniciado | modo=%s", load_mode())
-    _app.run_polling(drop_pending_updates=True)
+    log.info("Bot de apostas iniciado | modo=%s | chat=%s", load_mode(), _allowed_chat())
+    _app.run_polling(drop_pending_updates=False)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from config_loader import get_strategy_params
+from combo_definitions import COMBO_DEFINITIONS, resolve_combo_key
+from config_loader import get_combo_params
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,12 @@ def record_settlement(bet: dict, profit: float) -> None:
 
 def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     """Verifica se uma aposta pode ser feita. opp pode ser Opportunity ou dict."""
-    key = strategy_key or getattr(opp, "bet_key", None) or opp.get("bet_key", "under45")
-    params = get_strategy_params(key)
+    key = resolve_combo_key(
+        strategy_key or getattr(opp, "bet_key", None) or opp.get("bet_key", "combo_u45_o85")
+    )
+    if key not in COMBO_DEFINITIONS:
+        key = "combo_u45_o85"
+    params = get_combo_params(key)
 
     daily = load_daily_pl()
     pl = float(daily.get("realized_pl", 0))

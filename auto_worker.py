@@ -15,7 +15,6 @@ from config_loader import (
     get_api_keys,
     get_check_interval,
     get_manual_stake,
-    load_enabled_sports,
     load_mode,
 )
 from opportunity_scanner import Opportunity, OpportunityScanner
@@ -68,16 +67,12 @@ class AutoWorker:
             logger.warning(f"Reconcile falhou: {e}")
 
         fk, gk = get_api_keys()
-        strategy = get_active_strategy()
-        sports = load_enabled_sports()
-        stake = get_manual_stake()
         scanner = OpportunityScanner(
             self.betfair,
             APIFootball(fk),
             gk,
-            stake=stake,
-            active_strategy=strategy,
-            enabled_sports=sports,
+            stake=get_manual_stake(),
+            active_strategy=get_active_strategy(),
         )
         opps = scanner.scan()
         stats = scanner.last_stats
@@ -108,7 +103,6 @@ class AutoWorker:
         self.on_notify(msg, None)
 
     def run_scan_once(self) -> tuple[list[Opportunity], dict]:
-        """Varredura manual sob demanda."""
         fk, gk = get_api_keys()
         scanner = OpportunityScanner(
             self.betfair,
@@ -116,7 +110,5 @@ class AutoWorker:
             gk,
             stake=get_manual_stake(),
             active_strategy=get_active_strategy(),
-            enabled_sports=load_enabled_sports(),
         )
-        opps = scanner.scan()
-        return opps, scanner.last_stats
+        return scanner.scan(), scanner.last_stats

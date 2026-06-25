@@ -21,7 +21,7 @@ docker compose logs -f
 
 Troque modo, estratégia e esportes pelos botões no Telegram (`/start`).
 
-Estratégia padrão: **múltipla** Under 4.5 gols + Under 8.5 escanteios (mesmo jogo).
+Estratégia padrão: **múltipla** Menos 4.5 gols + Mais 8.5 escanteios (mesmo jogo).
 
 ## Configuração
 
