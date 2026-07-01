@@ -204,6 +204,8 @@ class OpportunityScanner:
         max_o = profile["max_odds"]
         if profile["key"] == "under45" and _is_world_cup(league):
             min_o = min(min_o, 1.08)
+        if profile["key"] == "corners_under_105" and _is_world_cup(league):
+            min_o = min(min_o, 1.35)
         return min_o, max_o
 
     def _scan_combo(self, profile: dict) -> tuple[List[Opportunity], dict]:

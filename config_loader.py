@@ -32,7 +32,7 @@ def load_bot_config() -> ConfigParser:
 
 def get_active_strategy() -> str:
     cfg = load_bot_config()
-    raw = cfg.get("bot", "active_strategy", fallback="all_combos")
+    raw = cfg.get("bot", "active_strategy", fallback="combo_u45_u105")
     return resolve_combo_key(raw)
 
 
@@ -79,7 +79,7 @@ def build_scan_profiles(active_strategy: str | None = None) -> list[dict[str, An
     elif strategy in COMBO_DEFINITIONS:
         keys = [strategy]
     else:
-        keys = list(ALL_COMBO_KEYS)
+        keys = ["combo_u45_u105"]
 
     profiles: list[dict[str, Any]] = []
     for key in keys:

@@ -101,24 +101,24 @@ def main_keyboard() -> InlineKeyboardMarkup:
             ),
         ],
         [
-            InlineKeyboardButton("🎯 Todas", callback_data="strat:all_combos"),
+            InlineKeyboardButton("🎯 U4.5+U10.5", callback_data="strat:combo_u45_u105"),
+            InlineKeyboardButton("📋 Outras", callback_data="strat:all_combos"),
+        ],
+        [
             InlineKeyboardButton("U4.5+O8.5", callback_data="strat:combo_u45_o85"),
-        ],
-        [
             InlineKeyboardButton("U4.5+BTTS❌", callback_data="strat:combo_u45_btts_no"),
-            InlineKeyboardButton("U3.5+O8.5", callback_data="strat:combo_u35_o85"),
         ],
         [
+            InlineKeyboardButton("U3.5+O8.5", callback_data="strat:combo_u35_o85"),
             InlineKeyboardButton("O1.5+O8.5", callback_data="strat:combo_o15_o85"),
-            InlineKeyboardButton("Fav+U4.5", callback_data="strat:combo_fav_u45"),
         ],
     ])
 
 
 MENU_TEXT = (
     "🤖 <b>Bot de Múltiplas</b> (Betfair Exchange)\n\n"
-    "Só apostas <b>combinadas no mesmo jogo</b> — 2 pernas.\n\n"
-    "🎯 <b>Todas</b> — varre as 5 múltiplas abaixo\n"
+    "Estratégia padrão: <b>Menos 4.5 gols + Menos 10.5 escanteios</b>\n"
+    "2 condições no mesmo jogo — só ganha se <b>ambas</b> baterem.\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 
@@ -142,19 +142,17 @@ def _format_opp(opp: Opportunity) -> str:
         f"🏆 {opp.league}",
     ]
     if opp.legs:
-        lines.append("<b>Pernas:</b>")
+        lines.append("<b>2 condições (ambas devem bater):</b>")
         for leg in opp.legs:
             lines.append(f"  • {leg.get('label', '')}")
         lines.append(f"📈 Odd combinada: <b>{opp.combined_odds or opp.odds:.2f}</b>")
     else:
         lines.append(f"📊 {opp.selection_label} @ <b>{opp.odds:.2f}</b>")
     lines.extend([
-        f"💵 Stake R$ {opp.stake:.0f} → Lucro ~R$ {opp.potential_profit:.2f}",
+        f"💵 Stake total R$ {opp.stake:.0f} → Lucro ~R$ {opp.potential_profit:.2f}",
         f"🤖 IA: {opp.confidence}%",
         f"💬 <i>{opp.reasoning}</i>",
     ])
-    if opp.legs:
-        lines.append("<i>Exchange: 2 apostas no mesmo jogo — ambas devem bater.</i>")
     return "\n".join(lines)
 
 
@@ -244,9 +242,19 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("mode:"):
         mode = data.split(":", 1)[1]
         if mode in VALID_MODES:
+            if mode == "auto" and get_active_strategy() == "all_combos":
+                await query.edit_message_text(
+                    "⛔ <b>Auto bloqueado com “Todas múltiplas”</b>\n\n"
+                    "Escolha <b>U4.5+U10.5</b> (padrão) antes de ativar Auto.",
+                    parse_mode="HTML",
+                    reply_markup=main_keyboard(),
+                )
+                return
             save_mode(mode)
+            strat = combo_label(get_active_strategy())
             await query.edit_message_text(
-                f"Modo alterado: <b>{_mode_label(mode)}</b>",
+                f"Modo alterado: <b>{_mode_label(mode)}</b>\n"
+                f"Estratégia ativa: <b>{strat}</b>",
                 parse_mode="HTML",
                 reply_markup=main_keyboard(),
             )

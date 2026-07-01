@@ -459,10 +459,9 @@ class BetfairAPI:
         Returns:
             dict: Resultado do cancelamento
         """
-        params = {
-            'marketId': market_id,
-            'customerRef': customer_ref or ''
-        }
+        params = {'marketId': market_id}
+        if customer_ref:
+            params['customerRef'] = customer_ref
         
         if bet_ids:
             instructions = [{'betId': bet_id} for bet_id in bet_ids]
