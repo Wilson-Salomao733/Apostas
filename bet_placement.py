@@ -22,18 +22,26 @@ def _leg_instruction(leg: dict, stake: float) -> dict:
     }
 
 
-def _parlay_leg_stakes(total_stake: float, odds1: float, odds2: float) -> tuple[float, float]:
+def _parlay_leg_stakes(
+    total_stake: float,
+    odds1: float,
+    odds2: float,
+    leg2_ratio: float | None = None,
+) -> tuple[float, float]:
     """
     Divide o stake total entre as 2 pernas (máx. perda = total_stake se ambas falharem).
-    Ajuste leve para aproximar lucro de odd combinada o1*o2.
+    Com leg2_ratio, fixa a fração na perna 2 (ex.: escanteios).
     """
-    combined = odds1 * odds2
-    if combined <= 1:
-        half = round(total_stake / 2, 2)
-        return max(half, 2.0), max(half, 2.0)
-    # Perna 1 proporcional à "força" da odd 2
-    s1 = round(total_stake * odds2 / combined, 2)
-    s2 = round(total_stake - s1, 2)
+    if leg2_ratio is not None and 0.0 < leg2_ratio < 1.0:
+        s2 = round(total_stake * leg2_ratio, 2)
+        s1 = round(total_stake - s2, 2)
+    else:
+        combined = odds1 * odds2
+        if combined <= 1:
+            half = round(total_stake / 2, 2)
+            return max(half, 2.0), max(half, 2.0)
+        s1 = round(total_stake * odds2 / combined, 2)
+        s2 = round(total_stake - s1, 2)
     if s1 < 2.0:
         s1, s2 = 2.0, max(round(total_stake - 2.0, 2), 2.0)
     if s2 < 2.0:
@@ -49,7 +57,15 @@ def build_instructions(opp: dict) -> tuple[list[dict], float, list[float]]:
         return [_leg_instruction(opp, stake)], stake, [stake]
 
     if len(legs) == 2:
-        s1, s2 = _parlay_leg_stakes(stake, float(legs[0]["odds"]), float(legs[1]["odds"]))
+        leg2_ratio = opp.get("leg2_stake_ratio")
+        if leg2_ratio is not None:
+            leg2_ratio = float(leg2_ratio)
+        s1, s2 = _parlay_leg_stakes(
+            stake,
+            float(legs[0]["odds"]),
+            float(legs[1]["odds"]),
+            leg2_ratio=leg2_ratio,
+        )
         stakes = [s1, s2]
     else:
         leg_stake = round(stake / len(legs), 2)

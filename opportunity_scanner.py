@@ -74,6 +74,7 @@ class Opportunity:
     sport: str = "football"
     legs: List[dict] = field(default_factory=list)
     combined_odds: float = 0.0
+    leg2_stake_ratio: float = 0.0
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
@@ -203,7 +204,7 @@ class OpportunityScanner:
         min_o = max(profile["min_odds"], MIN_GLOBAL_ODDS)
         max_o = profile["max_odds"]
         if profile["key"] == "under45" and _is_world_cup(league):
-            min_o = min(min_o, 1.08)
+            min_o = max(min_o, 1.25)
         if profile["key"] == "corners_under_105" and _is_world_cup(league):
             min_o = min(min_o, 1.35)
         return min_o, max_o
@@ -309,6 +310,7 @@ class OpportunityScanner:
         stake = float(combo_profile.get("stake", self.stake))
         profit = round(stake * (combined - 1) * 0.95, 2)
         key = combo_profile["key"]
+        leg2_ratio = combo_profile.get("leg2_stake_ratio")
         legs = [
             {
                 "key": "leg1",
@@ -347,6 +349,7 @@ class OpportunityScanner:
             kickoff=mkt1.get("marketStartTime", ""),
             sport="football",
             legs=legs,
+            leg2_stake_ratio=float(leg2_ratio) if leg2_ratio else 0.0,
         )
 
     def _analyze_groq_combo(

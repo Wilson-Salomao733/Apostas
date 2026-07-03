@@ -10,7 +10,7 @@ LEG_TEMPLATES: dict[str, dict[str, Any]] = {
         "key": "under45",
         "market_type": "OVER_UNDER_45",
         "selection_hint": "under",
-        "min_odds": 1.08,
+        "min_odds": 1.25,
         "max_odds": 1.45,
     },
     "corners_under_105": {
@@ -75,6 +75,8 @@ COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
         "min_volume": 2000,
         "min_combined_odds": 1.55,
         "max_combined_odds": 2.80,
+        "leg1_min_odds": 1.25,
+        "leg2_stake_ratio": 0.50,
     },
     "combo_u45_o85": {
         "key": "combo_u45_o85",

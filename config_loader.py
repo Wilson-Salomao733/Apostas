@@ -58,6 +58,11 @@ def get_combo_params(combo_key: str) -> dict[str, Any]:
             return cfg.getint(section, opt)
         return int(defaults.get(opt, fallback))
 
+    def _optional_float(opt: str) -> float | None:
+        if cfg.has_section(section) and cfg.has_option(section, opt):
+            return cfg.getfloat(section, opt)
+        return defaults.get(opt)
+
     return {
         "stake": _float("stake", 20.0),
         "min_combined_odds": _float("min_combined_odds", defaults.get("min_combined_odds", 1.70)),
@@ -68,6 +73,9 @@ def get_combo_params(combo_key: str) -> dict[str, Any]:
         "daily_profit_target": _float("daily_profit_target", 100.0),
         "min_volume": _float("min_volume", defaults.get("min_volume", 3000)),
         "good_league_only": defaults.get("good_league_only", True),
+        "leg1_min_odds": _optional_float("leg1_min_odds"),
+        "leg2_min_odds": _optional_float("leg2_min_odds"),
+        "leg2_stake_ratio": _optional_float("leg2_stake_ratio"),
     }
 
 
@@ -87,6 +95,10 @@ def build_scan_profiles(active_strategy: str | None = None) -> list[dict[str, An
         combo.update(get_combo_params(key))
         combo["leg1_profile"] = leg_profile(combo["leg1"])
         combo["leg2_profile"] = leg_profile(combo["leg2"])
+        if combo.get("leg1_min_odds") is not None:
+            combo["leg1_profile"]["min_odds"] = float(combo["leg1_min_odds"])
+        if combo.get("leg2_min_odds") is not None:
+            combo["leg2_profile"]["min_odds"] = float(combo["leg2_min_odds"])
         combo["sport"] = "football"
         combo["event_type_id"] = "1"
         combo["risk"] = "médio"
