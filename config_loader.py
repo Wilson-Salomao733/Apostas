@@ -11,6 +11,7 @@ from typing import Any
 from combo_definitions import (
     ALL_COMBO_KEYS,
     COMBO_DEFINITIONS,
+    SEMI_FILTER_RELAXATION,
     leg_profile,
     resolve_combo_key,
 )
@@ -39,6 +40,21 @@ def get_active_strategy() -> str:
 def get_check_interval() -> int:
     cfg = load_bot_config()
     return cfg.getint("bot", "check_interval", fallback=120)
+
+
+def get_daily_scan_config() -> dict[str, Any]:
+    """Configuração da varredura diária informativa."""
+    cfg = load_bot_config()
+    section = "daily_scan"
+    strategy = resolve_combo_key(cfg.get(section, "strategy", fallback="all_combos"))
+    if strategy not in VALID_STRATEGIES:
+        strategy = "all_combos"
+    return {
+        "enabled": cfg.getboolean(section, "enabled", fallback=True),
+        "time": cfg.get(section, "time", fallback="09:00"),
+        "strategy": strategy,
+        "send_empty": cfg.getboolean(section, "send_empty", fallback=True),
+    }
 
 
 def get_combo_params(combo_key: str) -> dict[str, Any]:
@@ -72,6 +88,7 @@ def get_combo_params(combo_key: str) -> dict[str, Any]:
         "daily_loss_limit": _float("daily_loss_limit", 60.0),
         "daily_profit_target": _float("daily_profit_target", 100.0),
         "min_volume": _float("min_volume", defaults.get("min_volume", 3000)),
+        "min_volume_leg2": _float("min_volume_leg2", defaults.get("min_volume_leg2", 500)),
         "good_league_only": defaults.get("good_league_only", True),
         "leg1_min_odds": _optional_float("leg1_min_odds"),
         "leg2_min_odds": _optional_float("leg2_min_odds"),
@@ -79,8 +96,30 @@ def get_combo_params(combo_key: str) -> dict[str, Any]:
     }
 
 
-def build_scan_profiles(active_strategy: str | None = None) -> list[dict[str, Any]]:
-    """Retorna apenas perfis de múltiplas para varredura."""
+def _apply_semi_relaxation(combo: dict[str, Any]) -> None:
+    """Afrouxa filtros só para sugestões (semi/manual). Auto não chama isto."""
+    relax = SEMI_FILTER_RELAXATION
+    for key in ("min_volume", "min_volume_leg2", "min_combined_odds", "min_confidence"):
+        if key not in relax:
+            continue
+        current = combo.get(key)
+        if current is None:
+            combo[key] = relax[key]
+        else:
+            combo[key] = min(float(current), float(relax[key]))
+
+    if combo.get("leg1") == "under45":
+        combo["leg1_min_odds"] = float(relax["leg1_min_odds"])
+    if combo.get("leg2") == "corners_under_105":
+        combo["leg2_min_odds"] = float(relax["leg2_min_odds"])
+
+
+def build_scan_profiles(
+    active_strategy: str | None = None,
+    filter_mode: str = "auto",
+) -> list[dict[str, Any]]:
+    """Retorna perfis de múltiplas. filter_mode=auto usa filtros estritos;
+    semi/manual relaxam para enviar mais sugestões."""
     strategy = resolve_combo_key(active_strategy or get_active_strategy())
     if strategy == "all_combos":
         keys = list(ALL_COMBO_KEYS)
@@ -89,10 +128,14 @@ def build_scan_profiles(active_strategy: str | None = None) -> list[dict[str, An
     else:
         keys = ["combo_u45_u105"]
 
+    relaxed = filter_mode in ("semi", "manual")
     profiles: list[dict[str, Any]] = []
     for key in keys:
         combo = dict(COMBO_DEFINITIONS[key])
         combo.update(get_combo_params(key))
+        if relaxed:
+            _apply_semi_relaxation(combo)
+        combo["filter_mode"] = "semi" if relaxed else "auto"
         combo["leg1_profile"] = leg_profile(combo["leg1"])
         combo["leg2_profile"] = leg_profile(combo["leg2"])
         if combo.get("leg1_min_odds") is not None:
@@ -148,7 +191,14 @@ def get_manual_stake() -> float:
 def get_api_keys() -> tuple[str, str]:
     cfg = load_bot_config()
     fk = os.getenv("API_FOOTBALL_KEY") or cfg.get("api_keys", "api_football_key", fallback="")
-    gk = os.getenv("GROQ_API_KEY") or cfg.get("api_keys", "groq_api_key", fallback="")
+    groq_keys = [
+        os.getenv("GROQ_API_KEY", ""),
+        os.getenv("GROQ_API_KEY_2", ""),
+        os.getenv("GROQ_API_KEYS", ""),
+        cfg.get("api_keys", "groq_api_key", fallback=""),
+        cfg.get("api_keys", "groq_api_key_2", fallback=""),
+    ]
+    gk = ",".join(k.strip() for k in groq_keys if k.strip())
     return fk, gk
 
 

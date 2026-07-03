@@ -126,21 +126,39 @@ class OpportunityScanner:
         stake: float | None = None,
         active_strategy: str | None = None,
         enabled_sports: list[str] | None = None,
+        filter_mode: str = "auto",
     ):
         self.betfair = betfair_api
         self.api_football = api_football
-        self.groq_key = groq_key
+        self.groq_keys = self._parse_groq_keys(groq_key)
+        self.groq_key = self.groq_keys[0] if self.groq_keys else ""
+        self._groq_key_index = 0
         self.stake = stake if stake is not None else get_manual_stake()
         self.active_strategy = active_strategy
+        # auto = filtros estritos; semi/manual = mais sugestões
+        self.filter_mode = filter_mode if filter_mode in ("auto", "semi", "manual") else "auto"
         self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "35"))
         self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "8"))
         self.last_stats: dict = {}
         self._near_misses: List[Opportunity] = []
         self._betfair_error: str | None = None
 
+    @staticmethod
+    def _parse_groq_keys(raw: str) -> list[str]:
+        keys: list[str] = []
+        for part in str(raw or "").replace("\n", ",").split(","):
+            key = part.strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
     def scan(self) -> List[Opportunity]:
-        profiles = build_scan_profiles(self.active_strategy)
-        logger.info("Iniciando varredura de múltiplas (%d tipo(s))...", len(profiles))
+        profiles = build_scan_profiles(self.active_strategy, filter_mode=self.filter_mode)
+        logger.info(
+            "Iniciando varredura de múltiplas (%d tipo(s), filtros=%s)...",
+            len(profiles),
+            self.filter_mode,
+        )
         candidates: List[Opportunity] = []
         self._near_misses = []
         self._betfair_error = None
@@ -201,12 +219,13 @@ class OpportunityScanner:
         return sorted(markets, key=sort_key)
 
     def _odds_range(self, profile: dict, league: str) -> tuple[float, float]:
-        min_o = max(profile["min_odds"], MIN_GLOBAL_ODDS)
-        max_o = profile["max_odds"]
-        if profile["key"] == "under45" and _is_world_cup(league):
-            min_o = max(min_o, 1.25)
-        if profile["key"] == "corners_under_105" and _is_world_cup(league):
-            min_o = min(min_o, 1.35)
+        """Faixa de odd por perna. Auto exige piso global; semi permite under mais baixo."""
+        min_o = float(profile["min_odds"])
+        max_o = float(profile["max_odds"])
+        if self.filter_mode == "auto":
+            min_o = max(min_o, MIN_GLOBAL_ODDS)
+        elif profile["key"] not in ("under45", "under35", "corners_under_105"):
+            min_o = max(min_o, MIN_GLOBAL_ODDS)
         return min_o, max_o
 
     def _scan_combo(self, profile: dict) -> tuple[List[Opportunity], dict]:
@@ -243,11 +262,13 @@ class OpportunityScanner:
                 continue
 
             partial["combo_checked"] = partial.get("combo_checked", 0) + 1
-            opp = self._evaluate_combo(
+            opp, reason = self._evaluate_combo(
                 mkt1, mkt2, leg1, leg2, profile, min_combined, max_combined, min_conf,
             )
             if opp:
                 approved.append(opp)
+            elif reason:
+                partial[reason] = partial.get(reason, 0) + 1
             time.sleep(0.6)
 
         return approved, partial
@@ -255,39 +276,49 @@ class OpportunityScanner:
     def _evaluate_combo(
         self, mkt1, mkt2, leg1, leg2, combo_profile,
         min_combined, max_combined, min_conf,
-    ) -> Optional[Opportunity]:
+    ) -> tuple[Optional[Opportunity], Optional[str]]:
         event = mkt1.get("event", {})
         league = mkt1.get("competition", {}).get("name", "")
         home, away = _parse_participants(event.get("name", ""))
         if not home or not away:
-            return None
+            return None, "bad_event"
 
         book1 = self._get_book(mkt1["marketId"])
         book2 = self._get_book(mkt2["marketId"])
         if not book1 or not book2:
-            return None
+            return None, "no_book"
 
         min_vol = float(combo_profile.get("min_volume", 3000))
+        # Escanteios costumam ter menos liquidez que gols
+        min_vol_leg2 = float(combo_profile.get("min_volume_leg2", min(min_vol, 500)))
         if float(book1.get("totalMatched", 0) or 0) < min_vol:
-            return None
-        if float(book2.get("totalMatched", 0) or 0) < min_vol:
-            return None
+            return None, "low_volume"
+        if float(book2.get("totalMatched", 0) or 0) < min_vol_leg2:
+            return None, "low_volume"
 
         sel1 = self._pick_selection(mkt1, book1, leg1)
         sel2 = self._pick_selection(mkt2, book2, leg2)
         if not sel1 or not sel2:
-            return None
+            return None, "no_selection"
 
         id1, label1, odds1 = sel1
         id2, label2, odds2 = sel2
         min1, max1 = self._odds_range(leg1, league)
         min2, max2 = self._odds_range(leg2, league)
         if not (min1 <= odds1 <= max1 and min2 <= odds2 <= max2):
-            return None
+            logger.info(
+                "Odd fora da faixa %s x %s: %.2f [%.2f-%.2f] / %.2f [%.2f-%.2f]",
+                home, away, odds1, min1, max1, odds2, min2, max2,
+            )
+            return None, "wrong_odds"
 
         combined = round(odds1 * odds2, 3)
         if not (min_combined <= combined <= max_combined):
-            return None
+            logger.info(
+                "Combinada fora da faixa %s x %s: %.3f [%.2f-%.2f]",
+                home, away, combined, min_combined, max_combined,
+            )
+            return None, "wrong_combined"
 
         needs_corners = combo_profile.get("needs_corners_stats", False)
         home_stats, away_stats, h2h, has_stats, corner_stats = self._get_stats(
@@ -300,12 +331,12 @@ class OpportunityScanner:
             combined, home_stats, away_stats, h2h, corner_stats, has_stats,
         )
         if not analysis:
-            return None
+            return None, "ia_rejected"
 
         confidence = int(analysis.get("confidence", 0))
         extra = 5 if not has_stats else 0
         if confidence < min_conf + extra or analysis.get("recommend") is False:
-            return None
+            return None, "ia_rejected"
 
         stake = float(combo_profile.get("stake", self.stake))
         profit = round(stake * (combined - 1) * 0.95, 2)
@@ -350,14 +381,14 @@ class OpportunityScanner:
             sport="football",
             legs=legs,
             leg2_stake_ratio=float(leg2_ratio) if leg2_ratio else 0.0,
-        )
+        ), None
 
     def _analyze_groq_combo(
         self, combo_profile, home, away, league,
         leg1_name, odds1, leg2_name, odds2, combined,
         home_stats, away_stats, h2h, corner_stats, has_stats,
     ) -> Optional[dict]:
-        if not self.groq_key:
+        if not self.groq_keys:
             return None
         stats_block = ""
         if has_stats:
@@ -682,7 +713,7 @@ JSON:
         has_stats: bool,
         corner_stats: dict,
     ) -> Optional[dict]:
-        if not self.groq_key:
+        if not self.groq_keys:
             return None
 
         if has_stats:
@@ -738,7 +769,7 @@ Seja conservador: recommend=true só se a aposta tiver boa relação risco/retor
         odds: float,
         selection_label: str,
     ) -> Optional[dict]:
-        if not self.groq_key:
+        if not self.groq_keys:
             return None
 
         prompt = f"""Analise esta oportunidade de aposta em tênis:
@@ -762,38 +793,58 @@ Seja conservador. Em tênis, considere superfície, ranking relativo e estilo de
         return self._call_groq(prompt)
 
     def _call_groq(self, prompt: str) -> Optional[dict]:
-        try:
-            resp = requests.post(
-                GROQ_API_URL,
-                headers={
-                    "Authorization": f"Bearer {self.groq_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": GROQ_MODEL,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "Analista de apostas esportivas. Responda apenas JSON válido.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 350,
-                },
-                timeout=25,
-                proxies={"http": None, "https": None},
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            return json.loads(content.strip())
-        except Exception as e:
-            logger.warning("Groq falhou: %s", e)
-            return None
+        last_error: Exception | None = None
+        for offset in range(len(self.groq_keys)):
+            idx = (self._groq_key_index + offset) % len(self.groq_keys)
+            key = self.groq_keys[idx]
+            try:
+                resp = requests.post(
+                    GROQ_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "Analista de apostas esportivas. Responda apenas JSON válido.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 350,
+                    },
+                    timeout=25,
+                    proxies={"http": None, "https": None},
+                )
+                if resp.status_code == 429 and len(self.groq_keys) > 1:
+                    logger.warning("Groq chave %d atingiu limite; tentando próxima.", idx + 1)
+                    last_error = requests.HTTPError(f"429 rate limit na chave {idx + 1}")
+                    continue
+                resp.raise_for_status()
+                self._groq_key_index = idx
+                self.groq_key = key
+                content = resp.json()["choices"][0]["message"]["content"].strip()
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                return json.loads(content.strip())
+            except requests.HTTPError as e:
+                last_error = e
+                if len(self.groq_keys) > 1:
+                    logger.warning("Groq chave %d falhou (%s); tentando próxima.", idx + 1, e)
+                    continue
+                break
+            except Exception as e:
+                last_error = e
+                break
+
+        if last_error:
+            logger.warning("Groq falhou: %s", last_error)
+        return None
 
     def _get_book(self, market_id: str) -> Optional[dict]:
         try:

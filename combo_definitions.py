@@ -72,10 +72,13 @@ COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
         "needs_corners_stats": True,
         "config_section": "combo_u45_u105",
         "good_league_only": True,
+        # Filtros estritos (modo auto). Semi/manual relaxam via config_loader.
         "min_volume": 2000,
+        "min_volume_leg2": 2000,
         "min_combined_odds": 1.55,
         "max_combined_odds": 2.80,
         "leg1_min_odds": 1.25,
+        "leg2_min_odds": 1.35,
         "leg2_stake_ratio": 0.50,
     },
     "combo_u45_o85": {
@@ -167,10 +170,19 @@ COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
 
 ALL_COMBO_KEYS: tuple[str, ...] = tuple(COMBO_DEFINITIONS.keys())
 
+# Relaxamento só para semi/manual (sugestões). Auto NÃO usa isto.
+SEMI_FILTER_RELAXATION: dict[str, Any] = {
+    "min_volume": 1000,
+    "min_volume_leg2": 300,
+    "min_combined_odds": 1.50,
+    "min_confidence": 70,
+    "leg1_min_odds": 1.10,
+    "leg2_min_odds": 1.25,
+}
+
 # Aliases legado
 COMBO_ALIASES = {
     "combo_u45_u85": "combo_u45_u105",
-    "combo_u45_o85": "combo_u45_u105",
 }
 
 

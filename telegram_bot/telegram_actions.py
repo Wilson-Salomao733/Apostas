@@ -154,7 +154,14 @@ def _stake() -> float:
 def _apostas_keys() -> tuple[str, str]:
     cfg = _cfg()
     fk = os.getenv("API_FOOTBALL_KEY") or cfg.get("api_keys", "api_football_key", fallback="")
-    gk = os.getenv("GROQ_API_KEY") or cfg.get("api_keys", "groq_api_key", fallback="")
+    groq_keys = [
+        os.getenv("GROQ_API_KEY", ""),
+        os.getenv("GROQ_API_KEY_2", ""),
+        os.getenv("GROQ_API_KEYS", ""),
+        cfg.get("api_keys", "groq_api_key", fallback=""),
+        cfg.get("api_keys", "groq_api_key_2", fallback=""),
+    ]
+    gk = ",".join(k.strip() for k in groq_keys if k.strip())
     return fk, gk
 
 
@@ -170,7 +177,9 @@ def run_scan(chat_id: str) -> None:
     os.chdir(ROOT)
     fk, gk = _apostas_keys()
     try:
-        scanner = OpportunityScanner(_betfair(), APIFootball(fk), gk, stake=_stake())
+        scanner = OpportunityScanner(
+            _betfair(), APIFootball(fk), gk, stake=_stake(), filter_mode="manual",
+        )
         opps = scanner.scan()
         stats = scanner.last_stats
     except Exception as e:
