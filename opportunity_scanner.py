@@ -155,7 +155,7 @@ class OpportunityScanner:
     def scan(self) -> List[Opportunity]:
         profiles = build_scan_profiles(self.active_strategy, filter_mode=self.filter_mode)
         logger.info(
-            "Iniciando varredura de múltiplas (%d tipo(s), filtros=%s)...",
+            "Iniciando varredura (%d tipo(s), filtros=%s)...",
             len(profiles),
             self.filter_mode,
         )
@@ -176,7 +176,10 @@ class OpportunityScanner:
             old_stake = self.stake
             self.stake = profile_stake
             try:
-                found, partial = self._scan_combo(profile)
+                if profile.get("kind") == "single":
+                    found, partial = self._scan_profile(profile)
+                else:
+                    found, partial = self._scan_combo(profile)
                 candidates.extend(found)
                 for k, v in partial.items():
                     stats[k] = stats.get(k, 0) + v
@@ -224,7 +227,7 @@ class OpportunityScanner:
         max_o = float(profile["max_odds"])
         if self.filter_mode == "auto":
             min_o = max(min_o, MIN_GLOBAL_ODDS)
-        elif profile["key"] not in ("under45", "under35", "corners_under_105"):
+        elif profile["key"] not in ("under45", "under35", "corners_under_105", "corners_105"):
             min_o = max(min_o, MIN_GLOBAL_ODDS)
         return min_o, max_o
 
@@ -486,11 +489,11 @@ JSON:
 
         home, away = _parse_participants(event.get("name", ""))
         if not home or not away:
-            return None, None
+            return None, "bad_event"
 
         book = self._get_book(mkt["marketId"])
         if not book:
-            return None, None
+            return None, "no_book"
 
         min_vol = profile.get("min_volume", 0)
         total_matched = float(book.get("totalMatched", 0) or 0)
@@ -499,7 +502,7 @@ JSON:
 
         selection = self._pick_selection(mkt, book, profile)
         if not selection:
-            return None, None
+            return None, "no_selection"
 
         sel_id, sel_label, odds = selection
         min_o, max_o = self._odds_range(profile, league)
@@ -514,8 +517,9 @@ JSON:
             )
             has_stats = False
         else:
+            needs_corners = "corners" in profile.get("key", "") or "esc" in profile.get("label", "").lower()
             home_stats, away_stats, h2h, has_stats, corner_stats = self._get_stats(
-                home, away, "corners" in profile.get("key", ""),
+                home, away, needs_corners,
             )
             if profile.get("require_stats") and not has_stats:
                 return None, "ia_rejected"

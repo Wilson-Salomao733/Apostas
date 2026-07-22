@@ -30,6 +30,7 @@ from config_loader import (
     load_mode,
     resolve_combo_key,
     save_mode,
+    save_strategy,
 )
 from opportunity_scanner import Opportunity, OpportunityScanner
 from risk_manager import can_bet, status_summary
@@ -77,7 +78,7 @@ def _strategy_label(key: str) -> str:
 
 def main_keyboard() -> InlineKeyboardMarkup:
     strategy = get_active_strategy()
-    strat_btn = "all_combos" if strategy == "all_combos" else strategy
+    mark = lambda key, label: f"✅ {label}" if strategy == key else label
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔍 Varredura", callback_data="scan"),
@@ -96,13 +97,25 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                f"📌 {_strategy_label(strat_btn)}",
+                f"📌 {_strategy_label(strategy)}",
                 callback_data="noop",
             ),
         ],
         [
-            InlineKeyboardButton("🎯 U4.5+U10.5", callback_data="strat:combo_u45_u105"),
-            InlineKeyboardButton("📋 Outras", callback_data="strat:all_combos"),
+            InlineKeyboardButton(
+                mark("combo_u45_u105", "U4.5+U10.5"),
+                callback_data="strat:combo_u45_u105",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                mark("under45", "Só U4.5 gols"),
+                callback_data="strat:under45",
+            ),
+            InlineKeyboardButton(
+                mark("corners_105", "Só U10.5 esc"),
+                callback_data="strat:corners_105",
+            ),
         ],
         [
             InlineKeyboardButton("U4.5+O8.5", callback_data="strat:combo_u45_o85"),
@@ -110,15 +123,17 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("U3.5+O8.5", callback_data="strat:combo_u35_o85"),
-            InlineKeyboardButton("O1.5+O8.5", callback_data="strat:combo_o15_o85"),
+            InlineKeyboardButton("📋 Outras", callback_data="strat:all_combos"),
         ],
     ])
 
 
 MENU_TEXT = (
-    "🤖 <b>Bot de Múltiplas</b> (Betfair Exchange)\n\n"
-    "Estratégia padrão: <b>Menos 4.5 gols + Menos 10.5 escanteios</b>\n"
-    "2 condições no mesmo jogo — só ganha se <b>ambas</b> baterem.\n\n"
+    "🤖 <b>Bot Betfair</b>\n\n"
+    "No Auto, escolha a estratégia:\n"
+    "• <b>U4.5+U10.5</b> — múltipla (2 pernas)\n"
+    "• <b>Só U4.5 gols</b> — dias fracos\n"
+    "• <b>Só U10.5 esc</b> — dias fracos\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 
@@ -245,7 +260,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if mode == "auto" and get_active_strategy() == "all_combos":
                 await query.edit_message_text(
                     "⛔ <b>Auto bloqueado com “Todas múltiplas”</b>\n\n"
-                    "Escolha <b>U4.5+U10.5</b> (padrão) antes de ativar Auto.",
+                    "Escolha <b>U4.5+U10.5</b>, <b>Só U4.5</b> ou <b>Só U10.5 esc</b> "
+                    "antes de ativar Auto.",
                     parse_mode="HTML",
                     reply_markup=main_keyboard(),
                 )
@@ -263,9 +279,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("strat:"):
         key = resolve_combo_key(data.split(":", 1)[1])
         if key in VALID_STRATEGIES:
-            _set_strategy(key)
+            save_strategy(key)
+            hint = ""
+            if key == "under45":
+                hint = "\n\n💡 Ideal para dias fracos — aposta só Under 4.5 gols."
+            elif key == "corners_105":
+                hint = "\n\n💡 Ideal para dias fracos — aposta só Under 10.5 escanteios."
+            elif key == "combo_u45_u105":
+                hint = "\n\n🎯 Padrão — múltipla U4.5 gols + U10.5 esc (ambas)."
             await query.edit_message_text(
-                f"Estratégia: <b>{combo_label(key)}</b>",
+                f"Estratégia: <b>{combo_label(key)}</b>{hint}",
                 parse_mode="HTML",
                 reply_markup=main_keyboard(),
             )
@@ -276,18 +299,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         loop = asyncio.get_event_loop()
         text = await loop.run_in_executor(None, _place_bet, opp_id)
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=main_keyboard())
-
-
-def _set_strategy(key: str) -> None:
-    from configparser import ConfigParser
-    path = ROOT / "bot_config.ini"
-    cfg = ConfigParser()
-    cfg.read(path)
-    if not cfg.has_section("bot"):
-        cfg.add_section("bot")
-    cfg.set("bot", "active_strategy", key)
-    with open(path, "w") as f:
-        cfg.write(f)
 
 
 def _manual_scan():

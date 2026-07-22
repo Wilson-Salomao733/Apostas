@@ -1,4 +1,4 @@
-"""Definições de pernas e múltiplas (mesmo jogo) — único modo do bot."""
+"""Definições de pernas, apostas simples e múltiplas (mesmo jogo)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ LEG_TEMPLATES: dict[str, dict[str, Any]] = {
         "key": "under45",
         "market_type": "OVER_UNDER_45",
         "selection_hint": "under",
-        "min_odds": 1.25,
+        "min_odds": 1.20,
         "max_odds": 1.45,
     },
     "corners_under_105": {
@@ -77,7 +77,7 @@ COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
         "min_volume_leg2": 2000,
         "min_combined_odds": 1.55,
         "max_combined_odds": 2.80,
-        "leg1_min_odds": 1.25,
+        "leg1_min_odds": 1.20,
         "leg2_min_odds": 1.35,
         "leg2_stake_ratio": 0.50,
     },
@@ -170,24 +170,82 @@ COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
 
 ALL_COMBO_KEYS: tuple[str, ...] = tuple(COMBO_DEFINITIONS.keys())
 
+# Apostas de 1 perna — úteis em dias fracos (sem exigir 2 mercados no mesmo jogo)
+SINGLE_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "under45": {
+        "key": "under45",
+        "kind": "single",
+        "label": "Menos 4.5 gols",
+        "market_type": "OVER_UNDER_45",
+        "selection_hint": "under",
+        "min_odds": 1.20,
+        "max_odds": 1.40,
+        "min_confidence": 72,
+        "min_volume": 1500,
+        "good_league_only": True,
+        "require_stats": False,
+        "config_section": "under45",
+        "prompt_goal": "Menos de 4.5 gols no jogo (máximo 4 gols).",
+        "risk": "médio",
+        "stake": 20.0,
+        "max_concurrent_bets": 5,
+        "daily_loss_limit": 80.0,
+        "daily_profit_target": 80.0,
+    },
+    "corners_105": {
+        "key": "corners_105",
+        "kind": "single",
+        "label": "Menos 10.5 escanteios",
+        "market_type": "OVER_UNDER_105_CORNR",
+        "selection_hint": "under",
+        "min_odds": 1.20,
+        "max_odds": 1.55,
+        "min_confidence": 72,
+        "min_volume": 500,
+        "good_league_only": True,
+        "require_stats": False,
+        "config_section": "corners_105",
+        "prompt_goal": "Menos de 10.5 escanteios no jogo (máximo 10).",
+        "risk": "médio",
+        "stake": 20.0,
+        "max_concurrent_bets": 3,
+        "daily_loss_limit": 60.0,
+        "daily_profit_target": 80.0,
+    },
+}
+
+ALL_SINGLE_KEYS: tuple[str, ...] = tuple(SINGLE_DEFINITIONS.keys())
+
 # Relaxamento só para semi/manual (sugestões). Auto NÃO usa isto.
 SEMI_FILTER_RELAXATION: dict[str, Any] = {
     "min_volume": 1000,
     "min_volume_leg2": 300,
     "min_combined_odds": 1.50,
     "min_confidence": 70,
-    "leg1_min_odds": 1.10,
+    "leg1_min_odds": 1.20,
     "leg2_min_odds": 1.25,
+    "single_min_volume": 400,
 }
 
 # Aliases legado
 COMBO_ALIASES = {
     "combo_u45_u85": "combo_u45_u105",
+    "corners_under_105": "corners_105",
+    "u45": "under45",
+    "u105": "corners_105",
 }
 
 
 def resolve_combo_key(key: str) -> str:
     return COMBO_ALIASES.get(key, key)
+
+
+def is_single_strategy(key: str) -> bool:
+    return resolve_combo_key(key) in SINGLE_DEFINITIONS
+
+
+def is_combo_strategy(key: str) -> bool:
+    return resolve_combo_key(key) in COMBO_DEFINITIONS
 
 
 def leg_profile(leg_key: str) -> dict[str, Any]:
