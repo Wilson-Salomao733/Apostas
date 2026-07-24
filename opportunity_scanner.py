@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 CURRENT_SEASON = 2026
-MIN_GLOBAL_ODDS = 1.20
+MIN_GLOBAL_ODDS = 1.12
 
 GOOD_LEAGUES = {
     "premier league", "la liga", "bundesliga", "serie a", "ligue 1",
@@ -137,8 +137,8 @@ class OpportunityScanner:
         self.active_strategy = active_strategy
         # auto = filtros estritos; semi/manual = mais sugestões
         self.filter_mode = filter_mode if filter_mode in ("auto", "semi", "manual") else "auto"
-        self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "35"))
-        self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "8"))
+        self.max_per_profile = int(os.getenv("SCAN_MAX_PER_TYPE", "60"))
+        self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "10"))
         self.last_stats: dict = {}
         self._near_misses: List[Opportunity] = []
         self._betfair_error: str | None = None
@@ -250,20 +250,32 @@ class OpportunityScanner:
                 secondary_by_event[eid] = m
 
         approved: List[Opportunity] = []
-        partial = {"markets_total": len(primary_markets), "combo_checked": 0}
+        partial = {
+            "markets_total": len(primary_markets),
+            "combo_checked": 0,
+            "blocked_league": 0,
+            "no_leg2_market": 0,
+        }
 
-        for mkt1 in primary_markets[: self.max_per_profile]:
+        # Só avalia jogos que já têm as 2 pernas (não gasta cota em no_leg2).
+        paired: list[tuple[dict, dict]] = []
+        for mkt1 in primary_markets:
             league = mkt1.get("competition", {}).get("name", "")
-            if profile.get("good_league_only") and _league_tier(league, "football") != "good":
-                partial["blocked_league"] = partial.get("blocked_league", 0) + 1
+            tier = _league_tier(league, "football")
+            if tier == "blocked":
+                partial["blocked_league"] += 1
                 continue
-
+            if profile.get("good_league_only") and tier != "good":
+                partial["blocked_league"] += 1
+                continue
             eid = str(mkt1.get("event", {}).get("id", ""))
             mkt2 = secondary_by_event.get(eid)
             if not mkt2:
-                partial["no_leg2_market"] = partial.get("no_leg2_market", 0) + 1
+                partial["no_leg2_market"] += 1
                 continue
+            paired.append((mkt1, mkt2))
 
+        for mkt1, mkt2 in paired[: self.max_per_profile]:
             partial["combo_checked"] = partial.get("combo_checked", 0) + 1
             opp, reason = self._evaluate_combo(
                 mkt1, mkt2, leg1, leg2, profile, min_combined, max_combined, min_conf,
@@ -272,7 +284,7 @@ class OpportunityScanner:
                 approved.append(opp)
             elif reason:
                 partial[reason] = partial.get(reason, 0) + 1
-            time.sleep(0.6)
+            time.sleep(0.45)
 
         return approved, partial
 
@@ -337,7 +349,8 @@ class OpportunityScanner:
             return None, "ia_rejected"
 
         confidence = int(analysis.get("confidence", 0))
-        extra = 5 if not has_stats else 0
+        # Sem stats: leve margem extra (antes +5 matava quase tudo).
+        extra = 2 if not has_stats else 0
         if confidence < min_conf + extra or analysis.get("recommend") is False:
             return None, "ia_rejected"
 
@@ -484,8 +497,6 @@ JSON:
             return None, "blocked_league"
         if profile.get("good_league_only") and tier != "good":
             return None, "blocked_league"
-        if profile["key"] == "under45" and tier == "unknown":
-            return None, "blocked_league"
 
         home, away = _parse_participants(event.get("name", ""))
         if not home or not away:
@@ -541,9 +552,9 @@ JSON:
             return None, "ia_rejected"
 
         confidence = int(analysis.get("confidence", 0))
-        extra = 5 if not has_stats else 0
+        extra = 2 if not has_stats else 0
         if tier == "unknown":
-            extra += 5
+            extra += 2
         min_conf = profile["min_confidence"] + extra
         if confidence < min_conf:
             self._maybe_near_miss(
