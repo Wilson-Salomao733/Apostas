@@ -405,7 +405,7 @@ class OpportunityScanner:
         home_stats, away_stats, h2h, corner_stats, has_stats,
     ) -> Optional[dict]:
         if not self.groq_keys:
-            return None
+            return self._heuristic_fallback()
         stats_block = ""
         if has_stats:
             ha = float(home_stats.get("avg_scored_total") or 0)
@@ -459,7 +459,7 @@ JSON:
                 approved.append(opp)
             elif reason:
                 partial[reason] = partial.get(reason, 0) + 1
-            time.sleep(0.5)
+            time.sleep(0.25)
 
         return approved, partial
 
@@ -729,7 +729,7 @@ JSON:
         corner_stats: dict,
     ) -> Optional[dict]:
         if not self.groq_keys:
-            return None
+            return self._heuristic_fallback()
 
         if has_stats:
             ha = float(home_stats.get("avg_scored_total") or 0)
@@ -785,7 +785,7 @@ Seja conservador: recommend=true só se a aposta tiver boa relação risco/retor
         selection_label: str,
     ) -> Optional[dict]:
         if not self.groq_keys:
-            return None
+            return self._heuristic_fallback()
 
         prompt = f"""Analise esta oportunidade de aposta em tênis:
 
@@ -808,6 +808,10 @@ Seja conservador. Em tênis, considere superfície, ranking relativo e estilo de
         return self._call_groq(prompt)
 
     def _call_groq(self, prompt: str) -> Optional[dict]:
+        if not self.groq_keys:
+            logger.warning("Sem chave Groq — usando fallback heurístico")
+            return self._heuristic_fallback()
+
         last_error: Exception | None = None
         for offset in range(len(self.groq_keys)):
             idx = (self._groq_key_index + offset) % len(self.groq_keys)
@@ -858,8 +862,17 @@ Seja conservador. Em tênis, considere superfície, ranking relativo e estilo de
                 break
 
         if last_error:
-            logger.warning("Groq falhou: %s", last_error)
-        return None
+            logger.warning("Groq falhou: %s — usando fallback heurístico", last_error)
+        return self._heuristic_fallback()
+
+    @staticmethod
+    def _heuristic_fallback() -> dict:
+        """Quando a IA cai (DNS/rede), ainda permite aposta se odd/volume já passaram."""
+        return {
+            "confidence": 68,
+            "recommend": True,
+            "reasoning": "IA indisponível; aprovado por filtros de odd/volume (fallback).",
+        }
 
     def _get_book(self, market_id: str) -> Optional[dict]:
         try:
