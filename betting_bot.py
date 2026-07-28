@@ -104,8 +104,8 @@ def main_keyboard() -> InlineKeyboardMarkup:
 
 MENU_TEXT = (
     "🤖 <b>Bot de Múltiplas</b> (Betfair Exchange)\n\n"
-    "Estratégia única: <b>Menos 4.5 gols + Menos 10.5 escanteios</b>\n"
-    "2 condições no mesmo jogo — só ganha se <b>ambas</b> baterem.\n\n"
+    "Estratégia: <b>Menos 4.5 gols + Menos 10.5 escanteios</b>\n"
+    "Se não houver escanteios no jogo → aposta só <b>Under 4.5</b>.\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 

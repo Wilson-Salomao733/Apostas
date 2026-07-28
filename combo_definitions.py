@@ -45,6 +45,9 @@ COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
         "leg2_min_odds": 1.20,
         "leg2_stake_ratio": 0.50,
         "min_confidence": 60,
+        # Se não houver mercado de escanteios no jogo, aposta só Under 4.5
+        "fallback_single_enabled": True,
+        "fallback_single_stake": 20.0,
     },
 }
 

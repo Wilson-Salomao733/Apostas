@@ -232,12 +232,13 @@ class OpportunityScanner:
         return min_o, max_o
 
     def _scan_combo(self, profile: dict) -> tuple[List[Opportunity], dict]:
-        """Múltipla mesmo jogo — duas pernas em mercados diferentes."""
+        """Múltipla mesmo jogo; se faltar escanteios, fallback para só Under 4.5."""
         leg1 = profile["leg1_profile"]
         leg2 = profile["leg2_profile"]
         min_combined = float(profile.get("min_combined_odds", 1.70))
         max_combined = float(profile.get("max_combined_odds", 3.00))
         min_conf = int(profile.get("min_confidence", 72))
+        fallback_enabled = bool(profile.get("fallback_single_enabled", True))
 
         primary_markets = self._prioritize_markets(
             self._fetch_markets(leg1["market_type"], "1"), "football",
@@ -249,16 +250,25 @@ class OpportunityScanner:
             if eid:
                 secondary_by_event[eid] = m
 
+        logger.info(
+            "Mercados: %s=%d | %s=%d",
+            leg1["market_type"], len(primary_markets),
+            leg2["market_type"], len(secondary_markets),
+        )
+
         approved: List[Opportunity] = []
         partial = {
             "markets_total": len(primary_markets),
+            "corners_markets": len(secondary_markets),
             "combo_checked": 0,
+            "fallback_u45_checked": 0,
             "blocked_league": 0,
             "no_leg2_market": 0,
+            "fallback_u45": 0,
         }
 
-        # Só avalia jogos que já têm as 2 pernas (não gasta cota em no_leg2).
         paired: list[tuple[dict, dict]] = []
+        singles: list[dict] = []
         for mkt1 in primary_markets:
             league = mkt1.get("competition", {}).get("name", "")
             tier = _league_tier(league, "football")
@@ -270,10 +280,12 @@ class OpportunityScanner:
                 continue
             eid = str(mkt1.get("event", {}).get("id", ""))
             mkt2 = secondary_by_event.get(eid)
-            if not mkt2:
+            if mkt2:
+                paired.append((mkt1, mkt2))
+            else:
                 partial["no_leg2_market"] += 1
-                continue
-            paired.append((mkt1, mkt2))
+                if fallback_enabled:
+                    singles.append(mkt1)
 
         for mkt1, mkt2 in paired[: self.max_per_profile]:
             partial["combo_checked"] = partial.get("combo_checked", 0) + 1
@@ -286,7 +298,66 @@ class OpportunityScanner:
                 partial[reason] = partial.get(reason, 0) + 1
             time.sleep(0.45)
 
+        # Sem escanteios no jogo → aposta só Under 4.5
+        if singles and fallback_enabled:
+            remaining = max(0, self.max_per_profile - len(approved))
+            single_profile = self._fallback_u45_profile(profile, leg1)
+            old_stake = self.stake
+            self.stake = float(
+                profile.get("fallback_single_stake")
+                or single_profile.get("stake")
+                or (old_stake / 2)
+            )
+            try:
+                for mkt1 in singles[:remaining]:
+                    partial["fallback_u45_checked"] += 1
+                    opp, reason = self._evaluate_market(mkt1, single_profile)
+                    if opp:
+                        approved.append(opp)
+                        partial["fallback_u45"] += 1
+                        logger.info(
+                            "Fallback U4.5: %s x %s @ %.2f (sem mercado de escanteios)",
+                            opp.home, opp.away, opp.odds,
+                        )
+                    elif reason:
+                        key = f"fallback_{reason}"
+                        partial[key] = partial.get(key, 0) + 1
+                    time.sleep(0.25)
+            finally:
+                self.stake = old_stake
+
         return approved, partial
+
+    def _fallback_u45_profile(self, combo_profile: dict, leg1: dict) -> dict:
+        """Perfil de aposta simples Under 4.5 quando falta a perna de escanteios."""
+        min_odds = float(
+            combo_profile.get("leg1_min_odds")
+            or leg1.get("min_odds")
+            or 1.15
+        )
+        max_odds = float(leg1.get("max_odds") or 1.50)
+        stake = float(
+            combo_profile.get("fallback_single_stake")
+            or (float(combo_profile.get("stake", 40.0)) / 2)
+        )
+        return {
+            "key": "under45",
+            "kind": "single",
+            "label": "Menos 4.5 gols (sem escanteios)",
+            "market_type": leg1["market_type"],
+            "selection_hint": leg1["selection_hint"],
+            "min_odds": min_odds,
+            "max_odds": max_odds,
+            "min_confidence": int(combo_profile.get("min_confidence", 60)),
+            "min_volume": float(combo_profile.get("min_volume", 300)),
+            "good_league_only": bool(combo_profile.get("good_league_only", False)),
+            "require_stats": False,
+            "prompt_goal": "Menos de 4.5 gols no jogo (máximo 4 gols).",
+            "risk": "médio",
+            "stake": stake,
+            "sport": "football",
+            "event_type_id": "1",
+        }
 
     def _evaluate_combo(
         self, mkt1, mkt2, leg1, leg2, combo_profile,

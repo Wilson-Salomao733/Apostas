@@ -137,6 +137,16 @@ def _section_params(section: str, defaults: dict[str, Any]) -> dict[str, Any]:
         "leg1_min_odds": _optional_float("leg1_min_odds"),
         "leg2_min_odds": _optional_float("leg2_min_odds"),
         "leg2_stake_ratio": _optional_float("leg2_stake_ratio"),
+        "fallback_single_stake": _optional_float("fallback_single_stake"),
+        "fallback_single_enabled": (
+            cfg.getboolean(
+                section,
+                "fallback_single_enabled",
+                fallback=bool(defaults.get("fallback_single_enabled", True)),
+            )
+            if cfg.has_section(section)
+            else bool(defaults.get("fallback_single_enabled", True))
+        ),
         "require_stats": (
             cfg.getboolean(section, "require_stats", fallback=bool(defaults.get("require_stats", False)))
             if cfg.has_section(section)
