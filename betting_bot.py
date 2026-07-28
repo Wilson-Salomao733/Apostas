@@ -77,8 +77,6 @@ def _strategy_label(key: str) -> str:
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
-    strategy = get_active_strategy()
-    mark = lambda key, label: f"✅ {label}" if strategy == key else label
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔍 Varredura", callback_data="scan"),
@@ -97,43 +95,17 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                f"📌 {_strategy_label(strategy)}",
+                "📌 Menos 4.5 gols + Menos 10.5 esc",
                 callback_data="noop",
             ),
-        ],
-        [
-            InlineKeyboardButton(
-                mark("combo_u45_u105", "U4.5+U10.5"),
-                callback_data="strat:combo_u45_u105",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                mark("under45", "Só U4.5 gols"),
-                callback_data="strat:under45",
-            ),
-            InlineKeyboardButton(
-                mark("corners_105", "Só U10.5 esc"),
-                callback_data="strat:corners_105",
-            ),
-        ],
-        [
-            InlineKeyboardButton("U4.5+O8.5", callback_data="strat:combo_u45_o85"),
-            InlineKeyboardButton("U4.5+BTTS❌", callback_data="strat:combo_u45_btts_no"),
-        ],
-        [
-            InlineKeyboardButton("U3.5+O8.5", callback_data="strat:combo_u35_o85"),
-            InlineKeyboardButton("📋 Outras", callback_data="strat:all_combos"),
         ],
     ])
 
 
 MENU_TEXT = (
-    "🤖 <b>Bot Betfair</b>\n\n"
-    "No Auto, escolha a estratégia:\n"
-    "• <b>U4.5+U10.5</b> — múltipla (2 pernas)\n"
-    "• <b>Só U4.5 gols</b> — dias fracos\n"
-    "• <b>Só U10.5 esc</b> — dias fracos\n\n"
+    "🤖 <b>Bot de Múltiplas</b> (Betfair Exchange)\n\n"
+    "Estratégia única: <b>Menos 4.5 gols + Menos 10.5 escanteios</b>\n"
+    "2 condições no mesmo jogo — só ganha se <b>ambas</b> baterem.\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 
@@ -257,16 +229,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("mode:"):
         mode = data.split(":", 1)[1]
         if mode in VALID_MODES:
-            if mode == "auto" and get_active_strategy() == "all_combos":
-                await query.edit_message_text(
-                    "⛔ <b>Auto bloqueado com “Todas múltiplas”</b>\n\n"
-                    "Escolha <b>U4.5+U10.5</b>, <b>Só U4.5</b> ou <b>Só U10.5 esc</b> "
-                    "antes de ativar Auto.",
-                    parse_mode="HTML",
-                    reply_markup=main_keyboard(),
-                )
-                return
             save_mode(mode)
+            # Garante foco na única estratégia
+            if get_active_strategy() != "combo_u45_u105":
+                save_strategy("combo_u45_u105")
             strat = combo_label(get_active_strategy())
             await query.edit_message_text(
                 f"Modo alterado: <b>{_mode_label(mode)}</b>\n"
@@ -277,21 +243,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith("strat:"):
-        key = resolve_combo_key(data.split(":", 1)[1])
-        if key in VALID_STRATEGIES:
-            save_strategy(key)
-            hint = ""
-            if key == "under45":
-                hint = "\n\n💡 Ideal para dias fracos — aposta só Under 4.5 gols."
-            elif key == "corners_105":
-                hint = "\n\n💡 Ideal para dias fracos — aposta só Under 10.5 escanteios."
-            elif key == "combo_u45_u105":
-                hint = "\n\n🎯 Padrão — múltipla U4.5 gols + U10.5 esc (ambas)."
-            await query.edit_message_text(
-                f"Estratégia: <b>{combo_label(key)}</b>{hint}",
-                parse_mode="HTML",
-                reply_markup=main_keyboard(),
-            )
+        await query.edit_message_text(
+            "📌 Estratégia fixa: <b>Menos 4.5 gols + Menos 10.5 esc</b>",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(),
+        )
         return
 
     if data.startswith("bet:"):

@@ -19,9 +19,9 @@ docker compose logs -f
 | **Full auto** | Aposta sozinho quando IA + limites aprovam |
 | **Parar** | Desliga o loop automático |
 
-Troque modo, estratégia e esportes pelos botões no Telegram (`/start`).
+Troque o modo pelos botões no Telegram (`/start`).
 
-Estratégia padrão: **Menos 4.5 gols + Menos 10.5 escanteios** (mesmo jogo, 2 condições).
+Estratégia única: **Menos 4.5 gols + Menos 10.5 escanteios** (mesmo jogo, 2 condições).
 
 ## Configuração
 
@@ -32,7 +32,7 @@ Estratégia padrão: **Menos 4.5 gols + Menos 10.5 escanteios** (mesmo jogo, 2 c
 | `data/bot_mode.json` | Modo atual (manual/semi/auto/off) |
 | `data/enabled_sports.json` | Esportes ativos (football, tennis) |
 
-Estratégias: `combo_u45_u85`, `under45`, `over15`, `over25`, `favorite`, `corners_85`, `tennis_match`, `tennis_games`
+Estratégia: `combo_u45_u105` (Menos 4.5 gols + Menos 10.5 escanteios)
 
 ## Backtest (CSVs liquidados)
 

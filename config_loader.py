@@ -26,7 +26,8 @@ MODE_FILE = ROOT / "data" / "bot_mode.json"
 STRATEGY_FILE = ROOT / "data" / "active_strategy.json"
 
 VALID_MODES = ("off", "manual", "semi", "auto")
-VALID_STRATEGIES = ("all_combos",) + ALL_COMBO_KEYS + ALL_SINGLE_KEYS
+# Única estratégia ativa: U4.5 gols + U10.5 escanteios
+VALID_STRATEGIES = ALL_COMBO_KEYS
 
 
 def load_bot_config() -> ConfigParser:
@@ -78,9 +79,11 @@ def get_daily_scan_config() -> dict[str, Any]:
     """Configuração da varredura diária informativa."""
     cfg = load_bot_config()
     section = "daily_scan"
-    strategy = resolve_combo_key(cfg.get(section, "strategy", fallback="all_combos"))
+    strategy = resolve_combo_key(
+        cfg.get(section, "strategy", fallback="combo_u45_u105")
+    )
     if strategy not in VALID_STRATEGIES:
-        strategy = "all_combos"
+        strategy = "combo_u45_u105"
     return {
         "enabled": cfg.getboolean(section, "enabled", fallback=True),
         "time": cfg.get(section, "time", fallback="09:00"),
@@ -213,10 +216,9 @@ def build_scan_profiles(
     if is_single_strategy(strategy):
         return [_build_single_profile(strategy, relaxed)]
 
-    if strategy == "all_combos":
-        keys = list(ALL_COMBO_KEYS)
-    elif is_combo_strategy(strategy):
-        keys = [strategy]
+    # Sempre U4.5 + U10.5 (únicas múltiplas restantes)
+    if strategy == "all_combos" or is_combo_strategy(strategy):
+        keys = list(ALL_COMBO_KEYS) if strategy == "all_combos" else [strategy]
     else:
         keys = ["combo_u45_u105"]
 
@@ -318,8 +320,6 @@ def get_telegram_creds() -> tuple[str, str]:
 
 def combo_label(key: str) -> str:
     key = resolve_combo_key(key)
-    if key == "all_combos":
-        return "Todas múltiplas"
     if key in SINGLE_DEFINITIONS:
         return SINGLE_DEFINITIONS[key]["label"]
-    return COMBO_DEFINITIONS.get(key, {}).get("label", key)
+    return COMBO_DEFINITIONS.get(key, {}).get("label", "Menos 4.5 gols + Menos 10.5 esc")
