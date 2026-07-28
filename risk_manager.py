@@ -82,12 +82,21 @@ def record_settlement(bet: dict, profit: float) -> None:
     save_active_bets(store)
 
 
+def _opp_field(opp: Any, key: str, default: Any = None) -> Any:
+    if isinstance(opp, dict):
+        return opp.get(key, default)
+    return getattr(opp, key, default)
+
+
 def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     """Verifica se uma aposta pode ser feita. opp pode ser Opportunity ou dict."""
     key = resolve_combo_key(
-        strategy_key or getattr(opp, "bet_key", None) or opp.get("bet_key", "combo_u45_u105")
+        strategy_key
+        or _opp_field(opp, "bet_key")
+        or "combo_u45_u105"
     )
     if key not in COMBO_DEFINITIONS and key not in SINGLE_DEFINITIONS:
+        # Fallback U4.5 usa limites do combo principal
         key = "combo_u45_u105"
     params = get_strategy_params(key)
 
@@ -98,14 +107,14 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     if pl >= params["daily_profit_target"]:
         return False, f"Meta de lucro diária atingida (R$ {params['daily_profit_target']:.0f})"
 
-    open_count = open_bets_count(key)
+    open_count = open_bets_count("combo_u45_u105") + open_bets_count("under45")
     if open_count >= params["max_concurrent_bets"]:
         return False, f"Máximo de apostas abertas ({params['max_concurrent_bets']})"
 
     store = load_active_bets()
-    opp_id = getattr(opp, "opp_id", None) or opp.get("opp_id")
-    market_ids = {getattr(opp, "market_id", None) or opp.get("market_id")}
-    legs = getattr(opp, "legs", None) or opp.get("legs") or []
+    opp_id = _opp_field(opp, "opp_id")
+    market_ids = {_opp_field(opp, "market_id")}
+    legs = _opp_field(opp, "legs") or []
     for leg in legs:
         market_ids.add(leg.get("market_id"))
     for b in store.get("bets", []):
@@ -122,18 +131,18 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
 
 def record_bet(opp: Any, bet_id: str, dry_run: bool = False) -> None:
     store = load_active_bets()
-    stake = float(getattr(opp, "stake", None) or opp.get("stake", 20))
-    legs = getattr(opp, "legs", None) or opp.get("legs") or []
+    stake = float(_opp_field(opp, "stake", 20) or 20)
+    legs = _opp_field(opp, "legs") or []
     entry = {
-        "opp_id": getattr(opp, "opp_id", None) or opp.get("opp_id"),
-        "bet_key": getattr(opp, "bet_key", None) or opp.get("bet_key"),
-        "market_id": getattr(opp, "market_id", None) or opp.get("market_id"),
-        "selection_id": getattr(opp, "selection_id", None) or opp.get("selection_id"),
-        "home": getattr(opp, "home", None) or opp.get("home", ""),
-        "away": getattr(opp, "away", None) or opp.get("away", ""),
-        "league": getattr(opp, "league", None) or opp.get("league", ""),
-        "odds": float(getattr(opp, "odds", None) or opp.get("odds", 0)),
-        "combined_odds": float(getattr(opp, "combined_odds", None) or opp.get("combined_odds", 0) or 0),
+        "opp_id": _opp_field(opp, "opp_id"),
+        "bet_key": _opp_field(opp, "bet_key"),
+        "market_id": _opp_field(opp, "market_id"),
+        "selection_id": _opp_field(opp, "selection_id"),
+        "home": _opp_field(opp, "home", ""),
+        "away": _opp_field(opp, "away", ""),
+        "league": _opp_field(opp, "league", ""),
+        "odds": float(_opp_field(opp, "odds", 0) or 0),
+        "combined_odds": float(_opp_field(opp, "combined_odds", 0) or 0),
         "stake": stake,
         "legs": legs,
         "bet_id": bet_id,
