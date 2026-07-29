@@ -95,7 +95,7 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                "📌 Menos 4.5 gols + Menos 10.5 esc",
+                "📌 Menos 10.5 escanteios",
                 callback_data="noop",
             ),
         ],
@@ -103,9 +103,9 @@ def main_keyboard() -> InlineKeyboardMarkup:
 
 
 MENU_TEXT = (
-    "🤖 <b>Bot de Múltiplas</b> (Betfair Exchange)\n\n"
-    "Estratégia: <b>Menos 4.5 gols + Menos 10.5 escanteios</b>\n"
-    "Se não houver escanteios no jogo → aposta só <b>Under 4.5</b>.\n\n"
+    "🤖 <b>Bot de Apostas</b> (Betfair Exchange)\n\n"
+    "Estratégia única: <b>Menos de 10.5 escanteios</b>\n"
+    "Sem Under 4.5 — só escanteios.\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 
@@ -230,9 +230,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         mode = data.split(":", 1)[1]
         if mode in VALID_MODES:
             save_mode(mode)
-            # Garante foco na única estratégia
-            if get_active_strategy() != "combo_u45_u105":
-                save_strategy("combo_u45_u105")
+            if get_active_strategy() != "corners_105":
+                save_strategy("corners_105")
             strat = combo_label(get_active_strategy())
             await query.edit_message_text(
                 f"Modo alterado: <b>{_mode_label(mode)}</b>\n"
@@ -244,7 +243,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith("strat:"):
         await query.edit_message_text(
-            "📌 Estratégia fixa: <b>Menos 4.5 gols + Menos 10.5 esc</b>",
+            "📌 Estratégia fixa: <b>Menos 10.5 escanteios</b>",
             parse_mode="HTML",
             reply_markup=main_keyboard(),
         )

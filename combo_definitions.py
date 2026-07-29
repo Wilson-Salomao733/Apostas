@@ -1,80 +1,63 @@
-"""Definições — foco único: Menos 4.5 gols + Menos 10.5 escanteios."""
+"""Definições — foco único: Menos de 10.5 escanteios."""
 
 from __future__ import annotations
 
 from typing import Any
 
-# Pernas do combo padrão
 LEG_TEMPLATES: dict[str, dict[str, Any]] = {
-    "under45": {
-        "key": "under45",
-        "market_type": "OVER_UNDER_45",
-        "selection_hint": "under",
-        "min_odds": 1.15,
-        "max_odds": 1.50,
-    },
     "corners_under_105": {
         "key": "corners_under_105",
         "market_type": "OVER_UNDER_105_CORNR",
         "selection_hint": "under",
         "min_odds": 1.20,
-        "max_odds": 2.40,
+        "max_odds": 2.50,
     },
 }
 
-COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {
-    "combo_u45_u105": {
-        "key": "combo_u45_u105",
-        "label": "Menos 4.5 gols + Menos 10.5 esc",
-        "leg1": "under45",
-        "leg2": "corners_under_105",
-        "leg1_short": "U4.5 gols",
-        "leg2_short": "U10.5 esc",
-        "ia_hint": (
-            "Jogo tranquilo: poucos gols (máx. 4) e poucos escanteios (máx. 10). "
-            "As duas condições precisam bater."
-        ),
-        "needs_corners_stats": True,
-        "config_section": "combo_u45_u105",
+# Sem múltiplas — só escanteios
+COMBO_DEFINITIONS: dict[str, dict[str, Any]] = {}
+ALL_COMBO_KEYS: tuple[str, ...] = ()
+
+SINGLE_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "corners_105": {
+        "key": "corners_105",
+        "kind": "single",
+        "label": "Menos 10.5 escanteios",
+        "market_type": "OVER_UNDER_105_CORNR",
+        "selection_hint": "under",
+        "min_odds": 1.20,
+        "max_odds": 2.50,
+        "min_confidence": 58,
+        "min_volume": 100,
         "good_league_only": False,
-        "min_volume": 300,
-        "min_volume_leg2": 100,
-        "min_combined_odds": 1.40,
-        "max_combined_odds": 3.50,
-        "leg1_min_odds": 1.15,
-        "leg2_min_odds": 1.20,
-        "leg2_stake_ratio": 0.50,
-        "min_confidence": 60,
-        # Se não houver mercado de escanteios no jogo, aposta só Under 4.5
-        "fallback_single_enabled": True,
-        "fallback_single_stake": 20.0,
+        "require_stats": False,
+        "config_section": "corners_105",
+        "prompt_goal": "Menos de 10.5 escanteios no jogo (máximo 10 escanteios).",
+        "risk": "médio",
+        "stake": 20.0,
+        "max_concurrent_bets": 5,
+        "daily_loss_limit": 80.0,
+        "daily_profit_target": 100.0,
     },
 }
 
-ALL_COMBO_KEYS: tuple[str, ...] = tuple(COMBO_DEFINITIONS.keys())
-
-# Sem apostas simples — só a múltipla U4.5 + U10.5
-SINGLE_DEFINITIONS: dict[str, dict[str, Any]] = {}
-ALL_SINGLE_KEYS: tuple[str, ...] = ()
+ALL_SINGLE_KEYS: tuple[str, ...] = tuple(SINGLE_DEFINITIONS.keys())
 
 SEMI_FILTER_RELAXATION: dict[str, Any] = {
-    "min_volume": 150,
-    "min_volume_leg2": 80,
-    "min_combined_odds": 1.35,
+    "min_volume": 50,
     "min_confidence": 55,
-    "leg1_min_odds": 1.12,
-    "leg2_min_odds": 1.15,
+    "single_min_volume": 50,
 }
 
 COMBO_ALIASES = {
-    "combo_u45_u85": "combo_u45_u105",
-    "combo_u45_o85": "combo_u45_u105",
-    "all_combos": "combo_u45_u105",
-    "under45": "combo_u45_u105",
-    "corners_105": "combo_u45_u105",
-    "corners_under_105": "combo_u45_u105",
-    "u45": "combo_u45_u105",
-    "u105": "combo_u45_u105",
+    "combo_u45_u105": "corners_105",
+    "combo_u45_u85": "corners_105",
+    "combo_u45_o85": "corners_105",
+    "all_combos": "corners_105",
+    "under45": "corners_105",
+    "u45": "corners_105",
+    "u105": "corners_105",
+    "corners_under_105": "corners_105",
 }
 
 

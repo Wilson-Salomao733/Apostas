@@ -26,8 +26,8 @@ MODE_FILE = ROOT / "data" / "bot_mode.json"
 STRATEGY_FILE = ROOT / "data" / "active_strategy.json"
 
 VALID_MODES = ("off", "manual", "semi", "auto")
-# Única estratégia ativa: U4.5 gols + U10.5 escanteios
-VALID_STRATEGIES = ALL_COMBO_KEYS
+# Única estratégia ativa: Menos 10.5 escanteios
+VALID_STRATEGIES = ALL_SINGLE_KEYS
 
 
 def load_bot_config() -> ConfigParser:
@@ -47,7 +47,7 @@ def get_active_strategy() -> str:
             return key
 
     cfg = load_bot_config()
-    raw = cfg.get("bot", "active_strategy", fallback="combo_u45_u105")
+    raw = cfg.get("bot", "active_strategy", fallback="corners_105")
     return resolve_combo_key(raw)
 
 
@@ -80,10 +80,10 @@ def get_daily_scan_config() -> dict[str, Any]:
     cfg = load_bot_config()
     section = "daily_scan"
     strategy = resolve_combo_key(
-        cfg.get(section, "strategy", fallback="combo_u45_u105")
+        cfg.get(section, "strategy", fallback="corners_105")
     )
     if strategy not in VALID_STRATEGIES:
-        strategy = "combo_u45_u105"
+        strategy = "corners_105"
     return {
         "enabled": cfg.getboolean(section, "enabled", fallback=True),
         "time": cfg.get(section, "time", fallback="09:00"),
@@ -181,7 +181,7 @@ def get_strategy_params(strategy_key: str) -> dict[str, Any]:
         return get_single_params(key)
     if is_combo_strategy(key):
         return get_combo_params(key)
-    return get_combo_params("combo_u45_u105")
+    return get_single_params("corners_105")
 
 
 def _apply_semi_relaxation(combo: dict[str, Any]) -> None:
@@ -223,34 +223,9 @@ def build_scan_profiles(
     strategy = resolve_combo_key(active_strategy or get_active_strategy())
     relaxed = filter_mode in ("semi", "manual")
 
-    if is_single_strategy(strategy):
-        return [_build_single_profile(strategy, relaxed)]
-
-    # Sempre U4.5 + U10.5 (únicas múltiplas restantes)
-    if strategy == "all_combos" or is_combo_strategy(strategy):
-        keys = list(ALL_COMBO_KEYS) if strategy == "all_combos" else [strategy]
-    else:
-        keys = ["combo_u45_u105"]
-
-    profiles: list[dict[str, Any]] = []
-    for key in keys:
-        combo = dict(COMBO_DEFINITIONS[key])
-        combo.update(get_combo_params(key))
-        if relaxed:
-            _apply_semi_relaxation(combo)
-        combo["kind"] = "combo"
-        combo["filter_mode"] = "semi" if relaxed else "auto"
-        combo["leg1_profile"] = leg_profile(combo["leg1"])
-        combo["leg2_profile"] = leg_profile(combo["leg2"])
-        if combo.get("leg1_min_odds") is not None:
-            combo["leg1_profile"]["min_odds"] = float(combo["leg1_min_odds"])
-        if combo.get("leg2_min_odds") is not None:
-            combo["leg2_profile"]["min_odds"] = float(combo["leg2_min_odds"])
-        combo["sport"] = "football"
-        combo["event_type_id"] = "1"
-        combo["risk"] = "médio"
-        profiles.append(combo)
-    return profiles
+    # Estratégia única: Under 10.5 escanteios (simples)
+    key = strategy if is_single_strategy(strategy) else "corners_105"
+    return [_build_single_profile(key, relaxed)]
 
 
 def _build_single_profile(key: str, relaxed: bool) -> dict[str, Any]:
@@ -332,4 +307,4 @@ def combo_label(key: str) -> str:
     key = resolve_combo_key(key)
     if key in SINGLE_DEFINITIONS:
         return SINGLE_DEFINITIONS[key]["label"]
-    return COMBO_DEFINITIONS.get(key, {}).get("label", "Menos 4.5 gols + Menos 10.5 esc")
+    return COMBO_DEFINITIONS.get(key, {}).get("label", "Menos 10.5 escanteios")

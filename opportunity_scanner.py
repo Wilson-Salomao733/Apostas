@@ -227,7 +227,7 @@ class OpportunityScanner:
         max_o = float(profile["max_odds"])
         if self.filter_mode == "auto":
             min_o = max(min_o, MIN_GLOBAL_ODDS)
-        elif profile["key"] not in ("under45", "under35", "corners_under_105", "corners_105"):
+        elif profile["key"] not in ("corners_under_105", "corners_105"):
             min_o = max(min_o, MIN_GLOBAL_ODDS)
         return min_o, max_o
 
@@ -536,6 +536,8 @@ JSON:
 
     def _fetch_markets(self, market_type: str, event_type_id: str) -> List[dict]:
         now = datetime.now(timezone.utc)
+        # Escanteios são raros na Betfair BR — janela maior
+        hours = 72 if "CORNR" in market_type else 24
         try:
             markets = self.betfair.list_market_catalogue(
                 filter_dict={
@@ -543,7 +545,7 @@ JSON:
                     "marketTypeCodes": [market_type],
                     "marketStartTime": {
                         "from": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "to": (now + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "to": (now + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     },
                 },
                 market_projection=[
@@ -551,7 +553,9 @@ JSON:
                 ],
                 max_results=80,
             )
-            return markets or []
+            found = markets or []
+            logger.info("Busca %s (%dh): %d mercado(s)", market_type, hours, len(found))
+            return found
         except Exception as e:
             logger.error("Erro ao buscar %s: %s", market_type, e)
             self._betfair_error = str(e)
@@ -588,7 +592,7 @@ JSON:
 
         sel_id, sel_label, odds = selection
         min_o, max_o = self._odds_range(profile, league)
-        if odds < MIN_GLOBAL_ODDS and not (_is_world_cup(league) and profile["key"] == "under45"):
+        if odds < MIN_GLOBAL_ODDS and profile["key"] not in ("corners_105", "corners_under_105"):
             return None, "wrong_odds"
         if not (min_o <= odds <= max_o):
             return None, "wrong_odds"
