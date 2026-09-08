@@ -77,6 +77,11 @@ def _strategy_label(key: str) -> str:
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
+    strategy = get_active_strategy()
+
+    def mark(key: str, label: str) -> str:
+        return f"✅ {label}" if strategy == key else label
+
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔍 Varredura", callback_data="scan"),
@@ -95,8 +100,18 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                "📌 Menos 10.5 escanteios",
-                callback_data="noop",
+                mark("combo_u45_u105", "U4.5+U10.5"),
+                callback_data="strat:combo_u45_u105",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                mark("under45", "Só U4.5 gols"),
+                callback_data="strat:under45",
+            ),
+            InlineKeyboardButton(
+                mark("corners_105", "Só U10.5 esc"),
+                callback_data="strat:corners_105",
             ),
         ],
     ])
@@ -104,8 +119,10 @@ def main_keyboard() -> InlineKeyboardMarkup:
 
 MENU_TEXT = (
     "🤖 <b>Bot de Apostas</b> (Betfair Exchange)\n\n"
-    "Estratégia única: <b>Menos de 10.5 escanteios</b>\n"
-    "Sem Under 4.5 — só escanteios.\n\n"
+    "Estratégias:\n"
+    "• <b>U4.5+U10.5</b> — múltipla (fallback só U4.5 se faltar esc)\n"
+    "• <b>Só U4.5 gols</b> — aposta simples\n"
+    "• <b>Só U10.5 esc</b> — aposta simples\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
 
@@ -230,8 +247,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         mode = data.split(":", 1)[1]
         if mode in VALID_MODES:
             save_mode(mode)
-            if get_active_strategy() != "corners_105":
-                save_strategy("corners_105")
             strat = combo_label(get_active_strategy())
             await query.edit_message_text(
                 f"Modo alterado: <b>{_mode_label(mode)}</b>\n"
@@ -242,11 +257,21 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith("strat:"):
-        await query.edit_message_text(
-            "📌 Estratégia fixa: <b>Menos 10.5 escanteios</b>",
-            parse_mode="HTML",
-            reply_markup=main_keyboard(),
-        )
+        key = resolve_combo_key(data.split(":", 1)[1])
+        if key in VALID_STRATEGIES:
+            save_strategy(key)
+            hint = ""
+            if key == "under45":
+                hint = "\n\n💡 Aposta só Under 4.5 gols."
+            elif key == "corners_105":
+                hint = "\n\n💡 Aposta só Under 10.5 escanteios."
+            elif key == "combo_u45_u105":
+                hint = "\n\n🎯 Múltipla U4.5 + U10.5 (fallback U4.5 se faltar esc)."
+            await query.edit_message_text(
+                f"Estratégia: <b>{combo_label(key)}</b>{hint}",
+                parse_mode="HTML",
+                reply_markup=main_keyboard(),
+            )
         return
 
     if data.startswith("bet:"):

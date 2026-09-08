@@ -21,7 +21,15 @@ docker compose logs -f
 
 Troque o modo pelos botões no Telegram (`/start`).
 
-Estratégia única: **Menos 10.5 escanteios**.
+## Estratégias (Telegram)
+
+| Estratégia | Tipo |
+|------------|------|
+| **U4.5+U10.5** (`combo_u45_u105`) | Múltipla no mesmo jogo; se faltar mercado de escanteios, fallback para só Under 4.5 |
+| **Só U4.5 gols** (`under45`) | Simples |
+| **Só U10.5 esc** (`corners_105`) | Simples |
+
+Padrão: `combo_u45_u105`.
 
 ## Configuração
 
@@ -31,8 +39,6 @@ Estratégia única: **Menos 10.5 escanteios**.
 | `bot_config.ini` | Estratégias, stakes, limites, chaves API |
 | `data/bot_mode.json` | Modo atual (manual/semi/auto/off) |
 | `data/enabled_sports.json` | Esportes ativos (football, tennis) |
-
-Estratégia: `corners_105` (Menos 10.5 escanteios)
 
 ## Backtest (CSVs liquidados)
 

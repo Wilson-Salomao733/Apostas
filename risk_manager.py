@@ -93,10 +93,10 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     key = resolve_combo_key(
         strategy_key
         or _opp_field(opp, "bet_key")
-        or "corners_105"
+        or "combo_u45_u105"
     )
     if key not in COMBO_DEFINITIONS and key not in SINGLE_DEFINITIONS:
-        key = "corners_105"
+        key = "combo_u45_u105"
     params = get_strategy_params(key)
 
     daily = load_daily_pl()
@@ -106,7 +106,11 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     if pl >= params["daily_profit_target"]:
         return False, f"Meta de lucro diária atingida (R$ {params['daily_profit_target']:.0f})"
 
-    open_count = open_bets_count("corners_105") + open_bets_count("corners_under_105")
+    open_count = open_bets_count(key)
+    if key == "corners_105":
+        open_count += open_bets_count("corners_under_105")
+    if key == "combo_u45_u105":
+        open_count += open_bets_count("under45")  # fallback conta junto
     if open_count >= params["max_concurrent_bets"]:
         return False, f"Máximo de apostas abertas ({params['max_concurrent_bets']})"
 
