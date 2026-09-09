@@ -7,6 +7,7 @@ import requests
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from configparser import ConfigParser
 from betfair_login import BetfairLogin
 
@@ -347,6 +348,64 @@ class BetfairAPI:
         # Remover campos None para evitar problemas
         params = {k: v for k, v in params.items() if v is not None}
         return self._make_request('SportsAPING/v1.0/listMarketCatalogue', params)
+
+    def list_market_types(self, filter_dict=None):
+        """Lista os tipos de mercado e sua contagem para um filtro."""
+        return self._make_request(
+            'SportsAPING/v1.0/listMarketTypes',
+            {'filter': filter_dict or {}},
+        )
+
+    def list_market_catalogue_complete(
+        self,
+        filter_dict=None,
+        market_projection=None,
+        sort='FIRST_TO_START',
+        max_results=1000,
+        slice_hours=12,
+    ):
+        """Busca catálogo em fatias de tempo para evitar TOO_MUCH_DATA.
+
+        A API não pagina ``listMarketCatalogue``. Quando há uma faixa de datas,
+        esta função divide a consulta e deduplica por marketId.
+        """
+        market_filter = dict(filter_dict or {})
+        time_range = dict(market_filter.get('marketStartTime') or {})
+        start_raw = time_range.get('from')
+        end_raw = time_range.get('to')
+        if not start_raw or not end_raw:
+            return self.list_market_catalogue(
+                market_filter, market_projection, sort, max_results
+            )
+
+        def parse_utc(value):
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+        cursor = parse_utc(start_raw)
+        end = parse_utc(end_raw)
+        if cursor.tzinfo is None:
+            cursor = cursor.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+
+        found = {}
+        step = timedelta(hours=max(1, int(slice_hours)))
+        while cursor < end:
+            slice_end = min(cursor + step, end)
+            sliced_filter = dict(market_filter)
+            sliced_filter['marketStartTime'] = {
+                'from': cursor.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'to': slice_end.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            }
+            batch = self.list_market_catalogue(
+                sliced_filter, market_projection, sort, max_results
+            )
+            for market in batch or []:
+                market_id = market.get('marketId')
+                if market_id:
+                    found[market_id] = market
+            cursor = slice_end
+        return sorted(found.values(), key=lambda m: m.get('marketStartTime', ''))
     
     def list_market_book(self, market_ids, price_projection=None, 
                         order_projection=None, match_projection=None):
@@ -369,6 +428,29 @@ class BetfairAPI:
             'matchProjection': match_projection
         }
         return self._make_request('SportsAPING/v1.0/listMarketBook', params)
+
+    def list_market_books_batched(
+        self,
+        market_ids,
+        price_projection=None,
+        order_projection=None,
+        match_projection=None,
+        batch_size=20,
+    ):
+        """Busca books em lotes e preserva a ordem recebida da API."""
+        ids = [str(market_id) for market_id in market_ids if market_id]
+        books = []
+        size = min(max(int(batch_size), 1), 40)
+        for index in range(0, len(ids), size):
+            books.extend(
+                self.list_market_book(
+                    ids[index:index + size],
+                    price_projection=price_projection,
+                    order_projection=order_projection,
+                    match_projection=match_projection,
+                ) or []
+            )
+        return books
     
     def place_orders(self, market_id, instructions, customer_ref=None):
         """
@@ -483,7 +565,14 @@ class BetfairAPI:
             return self._make_request('AccountAPING/v1.0/getAccountFunds', {}, endpoint=self.account_endpoint)
         return self._make_request('AccountAPING/v1.0/getAccountFunds', {})
     
-    def list_current_orders(self, bet_ids=None, market_ids=None, order_projection=None):
+    def list_current_orders(
+        self,
+        bet_ids=None,
+        market_ids=None,
+        order_projection=None,
+        from_record=0,
+        record_count=1000,
+    ):
         """
         Lista ordens (apostas) atuais
         
@@ -505,66 +594,121 @@ class BetfairAPI:
         
         if order_projection:
             params['orderProjection'] = order_projection
+
+        params['fromRecord'] = max(0, int(from_record))
+        params['recordCount'] = min(max(1, int(record_count)), 1000)
         
         return self._make_request('SportsAPING/v1.0/listCurrentOrders', params)
+
+    def list_current_orders_all(self, **kwargs):
+        """Pagina todas as ordens atuais."""
+        rows = []
+        offset = 0
+        while True:
+            result = self.list_current_orders(
+                from_record=offset,
+                record_count=1000,
+                **kwargs,
+            ) or {}
+            batch = result.get('currentOrders', [])
+            rows.extend(batch)
+            if not result.get('moreAvailable') or not batch:
+                return {'currentOrders': rows, 'moreAvailable': False}
+            offset += len(batch)
+
+    def list_cleared_orders(
+        self,
+        bet_status='SETTLED',
+        bet_ids=None,
+        event_type_ids=None,
+        market_ids=None,
+        settled_date_range=None,
+        group_by='BET',
+        include_item_description=True,
+        from_record=0,
+        record_count=1000,
+    ):
+        """Consulta oficial de ordens liquidadas/canceladas da Exchange."""
+        params = {
+            'betStatus': bet_status,
+            'groupBy': group_by,
+            'includeItemDescription': bool(include_item_description),
+            'fromRecord': max(0, int(from_record)),
+            'recordCount': min(max(1, int(record_count)), 1000),
+        }
+        if bet_ids:
+            params['betIds'] = [str(value) for value in bet_ids]
+        if event_type_ids:
+            params['eventTypeIds'] = [str(value) for value in event_type_ids]
+        if market_ids:
+            params['marketIds'] = [str(value) for value in market_ids]
+        if settled_date_range:
+            params['settledDateRange'] = settled_date_range
+        return self._make_request('SportsAPING/v1.0/listClearedOrders', params)
+
+    def list_cleared_orders_all(self, **kwargs):
+        """Pagina a consulta oficial de ordens encerradas."""
+        rows = []
+        offset = 0
+        while True:
+            result = self.list_cleared_orders(
+                from_record=offset,
+                record_count=1000,
+                **kwargs,
+            ) or {}
+            batch = result.get('clearedOrders', [])
+            rows.extend(batch)
+            if not result.get('moreAvailable') or not batch:
+                return {'clearedOrders': rows, 'moreAvailable': False}
+            offset += len(batch)
+
+    @staticmethod
+    def payload_inventory(payload):
+        """Retorna apenas nomes de campos; nunca inclui valores ou credenciais."""
+        def keys_of(items):
+            return sorted({
+                key
+                for item in items
+                if isinstance(item, dict)
+                for key in item
+            })
+
+        items = payload if isinstance(payload, list) else [payload]
+        items = [item for item in items if isinstance(item, dict)]
+        inventory = {'fields': keys_of(items)}
+        nested_names = (
+            'competition', 'description', 'event', 'itemDescription',
+            'runners', 'ex', 'availableToBack', 'availableToLay',
+            'instructionReports', 'currentOrders', 'clearedOrders',
+        )
+        for name in nested_names:
+            nested = []
+            for item in items:
+                value = item.get(name)
+                if isinstance(value, dict):
+                    nested.append(value)
+                elif isinstance(value, list):
+                    nested.extend(value)
+            if nested:
+                inventory[name] = BetfairAPI.payload_inventory(nested)
+        return inventory
     
     def get_settled_bets(self, bet_ids=None, from_date=None, to_date=None, page_index=0):
-        """
-        Busca apostas finalizadas (settled) da API de atividade da Betfair
-        
-        Args:
-            bet_ids: Lista de IDs de apostas (opcional)
-            from_date: Data inicial (opcional)
-            to_date: Data final (opcional)
-            page_index: Índice da página (padrão 0)
-            
-        Returns:
-            dict: Dados das apostas finalizadas
-        """
-        try:
-            # URL da API de atividade da Betfair Brasil
-            base_url = 'https://myactivity.betfair.bet.br/activity/exchange/settled'
-            
-            # Preparar headers com autenticação
-            headers = {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-            }
-            
-            # Se tiver session token, tentar usar (pode não funcionar para API web)
-            if self.session_token:
-                headers['Authorization'] = f'Bearer {self.session_token}'
-            
-            # Parâmetros da requisição
-            params = {
-                'pageIndex': page_index,
-                'pageSize': 10
-            }
-            
-            if bet_ids:
-                params['betIds'] = ','.join(bet_ids)
-            
-            # Fazer requisição
-            response = requests.get(
-                base_url,
-                params=params,
-                headers=headers,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                # Se falhar com autenticação, tentar sem (pode precisar de cookies de sessão)
-                logger.warning(
-                    f"Erro ao buscar apostas finalizadas: {response.status_code}. "
-                    "Pode ser necessário autenticação via cookies."
-                )
-                return None
-                
-        except Exception as e:
-            logger.error(f"Erro ao buscar apostas finalizadas: {e}")
-            return None
+        """Compatibilidade: usa o endpoint oficial listClearedOrders."""
+        settled_range = None
+        if from_date or to_date:
+            settled_range = {}
+            if from_date:
+                settled_range['from'] = from_date
+            if to_date:
+                settled_range['to'] = to_date
+        return self.list_cleared_orders(
+            bet_status='SETTLED',
+            bet_ids=bet_ids,
+            settled_date_range=settled_range,
+            from_record=max(0, int(page_index)) * 1000,
+            record_count=1000,
+        )
     
     def get_market_result(self, market_id):
         """

@@ -79,7 +79,6 @@ class BetfairLogin:
             
             if result.get('loginStatus') == 'SUCCESS':
                 print("✓ Login realizado com sucesso!")
-                print(f"Session Token: {result.get('sessionToken')}")
                 return result
             else:
                 error_msg = result.get('loginStatus', 'UNKNOWN_ERROR')

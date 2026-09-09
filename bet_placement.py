@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
+from bet_ledger import record_order
 from risk_manager import record_bet
+
+logger = logging.getLogger(__name__)
 
 
 def _leg_instruction(leg: dict, stake: float) -> dict:
@@ -56,6 +60,18 @@ def build_instructions(opp: dict) -> tuple[list[dict], float, list[float]]:
     if not legs:
         return [_leg_instruction(opp, stake)], stake, [stake]
 
+    explicit_stakes = opp.get("leg_stakes")
+    if not explicit_stakes:
+        values = [leg.get("stake") for leg in legs]
+        if all(value is not None for value in values):
+            explicit_stakes = values
+    if explicit_stakes:
+        stakes = [round(float(value), 2) for value in explicit_stakes]
+        if len(stakes) != len(legs) or any(value < 2.0 for value in stakes):
+            raise ValueError("Stakes explícitas inválidas para as pernas")
+        instructions = [_leg_instruction(leg, s) for leg, s in zip(legs, stakes)]
+        return instructions, round(sum(stakes), 2), stakes
+
     if len(legs) == 2:
         leg2_ratio = opp.get("leg2_stake_ratio")
         if leg2_ratio is not None:
@@ -86,6 +102,18 @@ def _extract_bet_id(result: dict | None, fallback: str) -> str:
     return fallback
 
 
+def _instruction_succeeded(result: dict | None) -> bool:
+    if not result or result.get("status") != "SUCCESS":
+        return False
+    reports = result.get("instructionReports", [])
+    return bool(reports) and reports[0].get("status") == "SUCCESS"
+
+
+def projected_profit(odds: float, stake: float, commission_rate: float = 0.065) -> float:
+    """Projeção conservadora; a liquidação usa sempre o profit retornado pela API."""
+    return round(max(0.0, stake * (odds - 1)) * (1 - commission_rate), 2)
+
+
 def place_opportunity(betfair, opp: dict, ref_prefix: str = "BOT") -> tuple[bool, str]:
     """Aposta múltipla na Betfair. Retorna (sucesso, mensagem HTML)."""
     legs = opp.get("legs") or []
@@ -99,11 +127,15 @@ def place_opportunity(betfair, opp: dict, ref_prefix: str = "BOT") -> tuple[bool
                 instructions=instructions,
                 customer_ref=link,
             )
-            if not result or result.get("status") != "SUCCESS":
+            if not _instruction_succeeded(result):
                 err = result.get("errorCode", "?") if result else "sem resposta"
                 return False, f"❌ Falha: <code>{err}</code>"
             bet_id = _extract_bet_id(result, link)
-            record_bet(opp, bet_id=bet_id)
+            try:
+                record_bet(opp, bet_id=bet_id, leg_stakes=leg_stakes)
+                record_order(opp, [bet_id], leg_stakes)
+            except Exception:
+                logger.exception("Aposta aceita, mas falhou ao persistir bet_id=%s", bet_id)
             return True, (
                 f"✅ <b>Aposta OK!</b>\n\n"
                 f"⚽ {opp['home']} x {opp['away']}\n"
@@ -119,7 +151,7 @@ def place_opportunity(betfair, opp: dict, ref_prefix: str = "BOT") -> tuple[bool
                 instructions=[instr],
                 customer_ref=f"{link}_L{i+1}",
             )
-            if not r or r.get("status") != "SUCCESS":
+            if not _instruction_succeeded(r):
                 err = r.get("errorCode", "?") if r else "sem resposta"
                 # Desfaz pernas já colocadas (só cancela se ainda EXECUTABLE)
                 for j, prev_id in enumerate(bet_ids):
@@ -136,19 +168,30 @@ def place_opportunity(betfair, opp: dict, ref_prefix: str = "BOT") -> tuple[bool
                 )
             bet_ids.append(_extract_bet_id(r, f"{link}_L{i+1}"))
 
-        record_bet(opp, bet_id=",".join(bet_ids))
-        combined = float(opp.get("combined_odds") or opp.get("odds", 0))
-        profit = round(float(opp["stake"]) * (combined - 1) * 0.95, 2)
+        try:
+            record_bet(
+                opp,
+                bet_id=",".join(bet_ids),
+                leg_stakes=leg_stakes,
+            )
+            record_order(opp, bet_ids, leg_stakes)
+        except Exception:
+            logger.exception("Carteira aceita, mas falhou ao persistir bet_ids=%s", bet_ids)
+        commission = float(opp.get("commission_rate", 0.065))
+        profit = round(sum(
+            projected_profit(float(leg["odds"]), leg_stakes[index], commission)
+            for index, leg in enumerate(legs)
+        ), 2)
         legs_txt = "\n".join(
             f"  {i+1}. {leg.get('label', '')} — R$ {leg_stakes[i]:.2f}"
             for i, leg in enumerate(legs)
         )
         return True, (
-            f"✅ <b>Múltipla OK!</b> (2 condições — só ganha se <b>ambas</b> baterem)\n\n"
+            f"✅ <b>Carteira de 2 apostas OK!</b> (ordens independentes)\n\n"
             f"⚽ {opp['home']} x {opp['away']}\n"
             f"{legs_txt}\n"
-            f"📈 Odd combinada: <b>{combined:.2f}</b>\n"
-            f"💵 Total apostado: R$ {exposure:.2f} | Lucro se ambas: ~R$ {profit:.2f}\n"
+            f"💵 Exposição total: R$ {exposure:.2f} | "
+            f"Lucro estimado se ambas vencerem: ~R$ {profit:.2f}\n"
             f"🆔 <code>{','.join(bet_ids)}</code>"
         )
     except Exception as e:

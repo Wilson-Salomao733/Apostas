@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -16,7 +17,10 @@ from typing import Dict, List, Optional, Tuple
 import requests
 
 from api_football import APIFootball
+from bet_ledger import record_snapshot
+from combo_definitions import u45_league_allowed
 from config_loader import build_scan_profiles, get_manual_stake
+from strategy_model import assess_value, execution_quality
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,13 @@ class Opportunity:
     legs: List[dict] = field(default_factory=list)
     combined_odds: float = 0.0
     leg2_stake_ratio: float = 0.0
+    leg_stakes: List[float] = field(default_factory=list)
+    event_id: str = ""
+    favorite_odds: float | None = None
+    model_probability: float | None = None
+    market_probability: float | None = None
+    ev_pct: float | None = None
+    commission_rate: float = 0.065
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
@@ -100,6 +111,26 @@ def _league_tier(league: str, sport: str = "football") -> str:
         if good in name:
             return "good"
     return "unknown"
+
+
+def _normalize_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value).lower())
+    return " ".join(
+        "".join(char for char in normalized if not unicodedata.combining(char))
+        .replace("-", " ")
+        .split()
+    )
+
+
+def _league_allowed(league: str, allowed_names: tuple[str, ...] | list[str]) -> bool:
+    normalized = _normalize_name(league)
+    return any(_normalize_name(name) in normalized for name in allowed_names)
+
+
+def _has_corner_expectation(corner_stats: dict) -> bool:
+    home = (corner_stats or {}).get("home") or {}
+    away = (corner_stats or {}).get("away") or {}
+    return float(home.get("avg_total") or 0) > 0 and float(away.get("avg_total") or 0) > 0
 
 
 def _parse_participants(event_name: str) -> Tuple[str, str]:
@@ -167,17 +198,28 @@ class OpportunityScanner:
             "blocked_league": 0,
             "wrong_odds": 0,
             "low_volume": 0,
-            "ia_rejected": 0,
-            "ia_analyzed": 0,
+            "model_rejected": 0,
+            "model_analyzed": 0,
         }
 
         for profile in profiles:
+            if self.filter_mode == "auto" and not profile.get("live_enabled", True):
+                stats["disabled_by_validation"] = (
+                    stats.get("disabled_by_validation", 0) + 1
+                )
+                logger.warning(
+                    "[%s] bloqueada no auto: validação temporal insuficiente",
+                    profile["label"],
+                )
+                continue
             profile_stake = profile.get("stake", self.stake)
             old_stake = self.stake
             self.stake = profile_stake
             try:
                 if profile.get("kind") == "single":
                     found, partial = self._scan_profile(profile)
+                elif profile.get("primary_optional_leg"):
+                    found, partial = self._scan_primary_optional(profile)
                 else:
                     found, partial = self._scan_combo(profile)
                 candidates.extend(found)
@@ -203,7 +245,13 @@ class OpportunityScanner:
             self._near_misses.sort(key=lambda o: -o.confidence)
             results = self._near_misses[:3]
             stats["fallback"] = len(results)
-        stats["approved"] = len(results)
+        stats["approved"] = sum(
+            1 for opportunity in results if "⚠️" not in opportunity.bet_type
+        )
+        stats["review_suggestions"] = len(results) - stats["approved"]
+        stats["model_analyzed"] = (
+            stats.get("model_rejected", 0) + stats["approved"]
+        )
         if stats.get("markets_total", 0) == 0 and self._betfair_error:
             stats["betfair_error"] = self._betfair_error
         self.last_stats = stats
@@ -328,6 +376,256 @@ class OpportunityScanner:
 
         return approved, partial
 
+    def _scan_primary_optional(self, profile: dict) -> tuple[List[Opportunity], dict]:
+        """U10.5 principal; anexa U4.5 somente quando todos os filtros próprios passam."""
+        corner_leg = profile["leg1_profile"]
+        goal_leg = profile["leg2_profile"]
+        corner_markets = self._prioritize_markets(
+            self._fetch_markets(corner_leg["market_type"], "1"), "football",
+        )
+        goal_markets = self._fetch_markets(goal_leg["market_type"], "1", hours=72)
+        goals_by_event = {
+            str(market.get("event", {}).get("id", "")): market
+            for market in goal_markets
+            if market.get("event", {}).get("id")
+        }
+        stats = {
+            "markets_total": len(corner_markets),
+            "corners_markets": len(corner_markets),
+            "goal_markets": len(goal_markets),
+            "corner_approved": 0,
+            "u45_added": 0,
+            "u45_no_market": 0,
+            "u45_league_rejected": 0,
+            "u45_favorite_rejected": 0,
+            "u45_model_rejected": 0,
+        }
+        approved: List[Opportunity] = []
+        corner_stake = float(profile.get("corner_stake", 2.0))
+        goal_stake = float(profile.get("goal_stake", 2.0))
+
+        for corner_market in corner_markets[: self.max_per_profile]:
+            league = corner_market.get("competition", {}).get("name", "")
+            if _league_tier(league, "football") == "blocked":
+                stats["blocked_league"] = stats.get("blocked_league", 0) + 1
+                continue
+            corner_profile = self._optional_leg_profile(
+                profile, corner_leg, corner_stake, profile["leg1_short"], "corners",
+            )
+            corner_opp, reason = self._evaluate_market(corner_market, corner_profile)
+            if not corner_opp:
+                if reason:
+                    stats[reason] = stats.get(reason, 0) + 1
+                continue
+
+            corner_opp.bet_key = profile["key"]
+            corner_opp.bet_type = f"{profile['label']} (somente U10.5)"
+            corner_opp.opp_id = _make_opp_id(
+                corner_market["marketId"], corner_opp.selection_id, profile["key"],
+            )
+            corner_opp.leg_stakes = [corner_stake]
+            stats["corner_approved"] += 1
+            event_id = corner_opp.event_id
+            goal_market = goals_by_event.get(event_id)
+            if not goal_market:
+                stats["u45_no_market"] += 1
+                approved.append(corner_opp)
+                continue
+
+            if not _league_allowed(league, profile.get("u45_leagues", ())):
+                stats["u45_league_rejected"] += 1
+                record_snapshot(
+                    profile["key"], goal_market, None, None, "", "REJECTED",
+                    "u45_league_not_allowed", leg_key="goals",
+                )
+                approved.append(corner_opp)
+                continue
+
+            match_market, match_book, favorite = self._match_odds_favorite(event_id)
+            threshold = float(profile.get("favorite_min_odds", 1.40))
+            if not self._favorite_allows_u45(favorite, threshold):
+                favorite_odds = float(favorite[2]) if favorite else None
+                reason = (
+                    f"favorite_below_{threshold:.2f}"
+                    if favorite else "favorite_price_unavailable"
+                )
+                stats["u45_favorite_rejected"] += 1
+                record_snapshot(
+                    profile["key"], goal_market, None, None, "", "REJECTED", reason,
+                    favorite_odds=favorite_odds, leg_key="goals",
+                )
+                if match_market:
+                    record_snapshot(
+                        profile["key"], match_market, match_book,
+                        int(favorite[0]) if favorite else None,
+                        str(favorite[1]) if favorite else "",
+                        "REJECTED", reason, favorite_odds=favorite_odds,
+                        leg_key="match_odds_gate",
+                    )
+                approved.append(corner_opp)
+                continue
+
+            favorite_odds = float(favorite[2])
+            record_snapshot(
+                profile["key"], match_market, match_book, int(favorite[0]), str(favorite[1]),
+                "APPROVED", f"favorite_odds_{favorite_odds:.2f}",
+                favorite_odds=favorite_odds, leg_key="match_odds_gate",
+            )
+            goal_profile = self._optional_leg_profile(
+                profile, goal_leg, goal_stake, profile["leg2_short"], "goals",
+            )
+            goal_profile["favorite_odds"] = favorite_odds
+            goal_opp, goal_reason = self._evaluate_market(goal_market, goal_profile)
+            if not goal_opp:
+                stats["u45_model_rejected"] += 1
+                if goal_reason:
+                    stats[f"u45_{goal_reason}"] = stats.get(f"u45_{goal_reason}", 0) + 1
+                approved.append(corner_opp)
+                continue
+
+            approved.append(
+                self._combine_optional_legs(
+                    profile, corner_opp, goal_opp, corner_stake, goal_stake, favorite_odds,
+                )
+            )
+            stats["u45_added"] += 1
+            time.sleep(0.25)
+        return approved, stats
+
+    @staticmethod
+    def _favorite_allows_u45(
+        favorite: tuple[int, str, float] | None,
+        threshold: float = 1.40,
+    ) -> bool:
+        return bool(favorite and float(favorite[2]) >= float(threshold))
+
+    @staticmethod
+    def _optional_leg_profile(
+        combo_profile: dict,
+        leg: dict,
+        stake: float,
+        label: str,
+        leg_key: str,
+    ) -> dict:
+        return {
+            **leg,
+            "key": combo_profile["key"],
+            "model_key": leg.get("key", combo_profile["key"]),
+            "kind": "single",
+            "label": label,
+            "risk": "médio",
+            "stake": stake,
+            "min_confidence": int(combo_profile.get("min_confidence", 60)),
+            "good_league_only": False,
+            "require_stats": True,
+            "commission_rate": float(combo_profile.get("commission_rate", 0.065)),
+            "max_spread_pct": float(combo_profile.get("max_spread_pct", 10.0)),
+            "min_back_size": float(combo_profile.get("min_back_size", 10.0)),
+            "min_ev_pct": float(combo_profile.get("min_ev_pct", 2.0)),
+            "min_probability_edge_pct": float(
+                combo_profile.get("min_probability_edge_pct", 2.0)
+            ),
+            "leg_key": leg_key,
+        }
+
+    def _match_odds_favorite(
+        self, event_id: str,
+    ) -> tuple[dict | None, dict | None, tuple[int, str, float] | None]:
+        try:
+            markets = self.betfair.list_market_catalogue_complete(
+                filter_dict={
+                    "eventIds": [str(event_id)],
+                    "marketTypeCodes": ["MATCH_ODDS"],
+                },
+                market_projection=[
+                    "COMPETITION", "EVENT", "RUNNER_DESCRIPTION",
+                    "MARKET_START_TIME", "MARKET_DESCRIPTION",
+                ],
+                max_results=20,
+                slice_hours=12,
+            ) or []
+        except Exception as exc:
+            logger.warning("MATCH_ODDS indisponível para evento %s: %s", event_id, exc)
+            return None, None, None
+        if not markets:
+            return None, None, None
+        market = markets[0]
+        book = self._get_book(market["marketId"])
+        if not book:
+            return market, None, None
+        return market, book, self._pick_favorite(market.get("runners", []), book)
+
+    @staticmethod
+    def _combine_optional_legs(
+        profile: dict,
+        corner: Opportunity,
+        goal: Opportunity,
+        corner_stake: float,
+        goal_stake: float,
+        favorite_odds: float,
+    ) -> Opportunity:
+        commission = float(profile.get("commission_rate", 0.065))
+        legs = [
+            {
+                "key": "corners",
+                "market_id": corner.market_id,
+                "selection_id": corner.selection_id,
+                "odds": corner.odds,
+                "stake": corner_stake,
+                "label": f"{profile['leg1_short']} @ {corner.odds:.2f}",
+            },
+            {
+                "key": "goals",
+                "market_id": goal.market_id,
+                "selection_id": goal.selection_id,
+                "odds": goal.odds,
+                "stake": goal_stake,
+                "label": f"{profile['leg2_short']} @ {goal.odds:.2f}",
+            },
+        ]
+        total_stake = round(corner_stake + goal_stake, 2)
+        profit = round(
+            (
+                corner_stake * (corner.odds - 1)
+                + goal_stake * (goal.odds - 1)
+            ) * (1 - commission),
+            2,
+        )
+        return Opportunity(
+            opp_id=_make_opp_id(corner.market_id, corner.selection_id, profile["key"]),
+            bet_type=profile["label"],
+            bet_key=profile["key"],
+            risk="médio",
+            home=corner.home,
+            away=corner.away,
+            league=corner.league,
+            market_id=corner.market_id,
+            selection_id=corner.selection_id,
+            selection_label=f"{legs[0]['label']} + {legs[1]['label']}",
+            odds=round(corner.odds * goal.odds, 3),
+            stake=total_stake,
+            confidence=min(corner.confidence, goal.confidence),
+            reasoning=(
+                f"U10.5: {corner.reasoning} U4.5: {goal.reasoning} "
+                f"Favorito MATCH_ODDS @ {favorite_odds:.2f}."
+            )[:400],
+            potential_profit=profit,
+            kickoff=corner.kickoff,
+            legs=legs,
+            combined_odds=round(corner.odds * goal.odds, 3),
+            leg_stakes=[corner_stake, goal_stake],
+            event_id=corner.event_id,
+            favorite_odds=favorite_odds,
+            model_probability=min(
+                float(corner.model_probability or 0), float(goal.model_probability or 0)
+            ),
+            market_probability=min(
+                float(corner.market_probability or 0), float(goal.market_probability or 0)
+            ),
+            ev_pct=min(float(corner.ev_pct or 0), float(goal.ev_pct or 0)),
+            commission_rate=commission,
+        )
+
     def _fallback_u45_profile(self, combo_profile: dict, leg1: dict) -> dict:
         """Perfil de aposta simples Under 4.5 quando falta a perna de escanteios."""
         min_odds = float(
@@ -374,14 +672,6 @@ class OpportunityScanner:
         if not book1 or not book2:
             return None, "no_book"
 
-        min_vol = float(combo_profile.get("min_volume", 3000))
-        # Escanteios costumam ter menos liquidez que gols
-        min_vol_leg2 = float(combo_profile.get("min_volume_leg2", min(min_vol, 500)))
-        if float(book1.get("totalMatched", 0) or 0) < min_vol:
-            return None, "low_volume"
-        if float(book2.get("totalMatched", 0) or 0) < min_vol_leg2:
-            return None, "low_volume"
-
         sel1 = self._pick_selection(mkt1, book1, leg1)
         sel2 = self._pick_selection(mkt2, book2, leg2)
         if not sel1 or not sel2:
@@ -389,12 +679,50 @@ class OpportunityScanner:
 
         id1, label1, odds1 = sel1
         id2, label2, odds2 = sel2
+
+        def _absolute_leg_stake(leg: dict) -> float:
+            key = "corner_stake" if "CORNR" in str(leg.get("market_type", "")) else "goal_stake"
+            value = combo_profile.get(key)
+            if value is not None:
+                return float(value)
+            return float(combo_profile.get("stake", self.stake)) / 2
+
+        stake1 = _absolute_leg_stake(leg1)
+        stake2 = _absolute_leg_stake(leg2)
+        quality1 = execution_quality(
+            book1, id1, stake1,
+            max_spread_pct=float(combo_profile.get("max_spread_pct", 10)),
+            min_back_size=float(combo_profile.get("min_back_size", 10)),
+        )
+        quality2 = execution_quality(
+            book2, id2, stake2,
+            max_spread_pct=float(combo_profile.get("max_spread_pct", 10)),
+            min_back_size=float(combo_profile.get("min_back_size", 10)),
+        )
+        if not quality1.allowed or not quality2.allowed:
+            record_snapshot(
+                combo_profile["key"], mkt1, book1, id1, label1,
+                "REJECTED", quality1.reason, leg_key=leg1.get("key", "leg1"),
+            )
+            record_snapshot(
+                combo_profile["key"], mkt2, book2, id2, label2,
+                "REJECTED", quality2.reason, leg_key=leg2.get("key", "leg2"),
+            )
+            return None, "execution_quality"
         min1, max1 = self._odds_range(leg1, league)
         min2, max2 = self._odds_range(leg2, league)
         if not (min1 <= odds1 <= max1 and min2 <= odds2 <= max2):
             logger.info(
                 "Odd fora da faixa %s x %s: %.2f [%.2f-%.2f] / %.2f [%.2f-%.2f]",
                 home, away, odds1, min1, max1, odds2, min2, max2,
+            )
+            record_snapshot(
+                combo_profile["key"], mkt1, book1, id1, label1,
+                "REJECTED", "wrong_odds",
+            )
+            record_snapshot(
+                combo_profile["key"], mkt2, book2, id2, label2,
+                "REJECTED", "wrong_odds",
             )
             return None, "wrong_odds"
 
@@ -404,37 +732,67 @@ class OpportunityScanner:
                 "Combinada fora da faixa %s x %s: %.3f [%.2f-%.2f]",
                 home, away, combined, min_combined, max_combined,
             )
+            record_snapshot(
+                combo_profile["key"], mkt1, book1, id1, label1,
+                "REJECTED", "portfolio_price_range",
+            )
+            record_snapshot(
+                combo_profile["key"], mkt2, book2, id2, label2,
+                "REJECTED", "portfolio_price_range",
+            )
             return None, "wrong_combined"
 
         needs_corners = combo_profile.get("needs_corners_stats", False)
         home_stats, away_stats, h2h, has_stats, corner_stats = self._get_stats(
             home, away, needs_corners,
         )
-        analysis = self._analyze_groq_combo(
-            combo_profile, home, away, league,
-            combo_profile["leg1_short"], odds1,
-            combo_profile["leg2_short"], odds2,
-            combined, home_stats, away_stats, h2h, corner_stats, has_stats,
+        model_defaults = {
+            "commission_rate": combo_profile.get("commission_rate", 0.065),
+            "min_ev_pct": combo_profile.get("min_ev_pct", 2.0),
+            "min_probability_edge_pct": combo_profile.get(
+                "min_probability_edge_pct", 2.0
+            ),
+        }
+        analysis1 = assess_value(
+            {**leg1, **model_defaults}, odds1, book1, id1,
+            home_stats, away_stats, corner_stats,
         )
-        if not analysis:
-            return None, "ia_rejected"
+        analysis2 = assess_value(
+            {**leg2, **model_defaults}, odds2, book2, id2,
+            home_stats, away_stats, corner_stats,
+        )
+        if not analysis1.get("recommend") or not analysis2.get("recommend"):
+            record_snapshot(
+                combo_profile["key"], mkt1, book1, id1, label1,
+                "REJECTED", str(analysis1.get("reasoning", "")),
+            )
+            record_snapshot(
+                combo_profile["key"], mkt2, book2, id2, label2,
+                "REJECTED", str(analysis2.get("reasoning", "")),
+            )
+            return None, "model_rejected"
 
-        confidence = int(analysis.get("confidence", 0))
-        # Sem stats: leve margem extra (antes +5 matava quase tudo).
-        extra = 2 if not has_stats else 0
-        if confidence < min_conf + extra or analysis.get("recommend") is False:
-            return None, "ia_rejected"
-
-        stake = float(combo_profile.get("stake", self.stake))
-        profit = round(stake * (combined - 1) * 0.95, 2)
+        stake = round(stake1 + stake2, 2)
         key = combo_profile["key"]
-        leg2_ratio = combo_profile.get("leg2_stake_ratio")
+        commission = float(combo_profile.get("commission_rate", 0.065))
+        profit = round(
+            (
+                stake1 * (odds1 - 1)
+                + stake2 * (odds2 - 1)
+            ) * (1 - commission),
+            2,
+        )
+        confidence = min(
+            int(analysis1.get("confidence", 0)),
+            int(analysis2.get("confidence", 0)),
+        )
         legs = [
             {
                 "key": "leg1",
                 "market_id": mkt1["marketId"],
                 "selection_id": id1,
                 "odds": odds1,
+                "stake": stake1,
                 "label": f"{combo_profile['leg1_short']} @ {odds1:.2f}",
             },
             {
@@ -442,10 +800,19 @@ class OpportunityScanner:
                 "market_id": mkt2["marketId"],
                 "selection_id": id2,
                 "odds": odds2,
+                "stake": stake2,
                 "label": f"{combo_profile['leg2_short']} @ {odds2:.2f}",
             },
         ]
         opp_id = _make_opp_id(mkt1["marketId"], id2, key)
+        record_snapshot(
+            key, mkt1, book1, id1, label1, "APPROVED", analysis1["reasoning"],
+            leg_key=leg1.get("key", "leg1"),
+        )
+        record_snapshot(
+            key, mkt2, book2, id2, label2, "APPROVED", analysis2["reasoning"],
+            leg_key=leg2.get("key", "leg2"),
+        )
 
         return Opportunity(
             opp_id=opp_id,
@@ -462,12 +829,29 @@ class OpportunityScanner:
             combined_odds=combined,
             stake=stake,
             confidence=confidence,
-            reasoning=str(analysis.get("reasoning", ""))[:400],
+            reasoning=(
+                f"U4.5: {analysis1['reasoning']} "
+                f"U10.5: {analysis2['reasoning']}"
+            )[:400],
             potential_profit=profit,
             kickoff=mkt1.get("marketStartTime", ""),
             sport="football",
             legs=legs,
-            leg2_stake_ratio=float(leg2_ratio) if leg2_ratio else 0.0,
+            leg_stakes=[stake1, stake2],
+            event_id=str(event.get("id", "")),
+            model_probability=min(
+                float(analysis1.get("model_probability") or 0),
+                float(analysis2.get("model_probability") or 0),
+            ),
+            market_probability=min(
+                float(analysis1.get("market_probability") or 0),
+                float(analysis2.get("market_probability") or 0),
+            ),
+            ev_pct=min(
+                float(analysis1.get("ev_pct") or 0),
+                float(analysis2.get("ev_pct") or 0),
+            ),
+            commission_rate=commission,
         ), None
 
     def _analyze_groq_combo(
@@ -534,12 +918,14 @@ JSON:
 
         return approved, partial
 
-    def _fetch_markets(self, market_type: str, event_type_id: str) -> List[dict]:
+    def _fetch_markets(
+        self, market_type: str, event_type_id: str, hours: int | None = None,
+    ) -> List[dict]:
         now = datetime.now(timezone.utc)
         # Escanteios são raros na Betfair BR — janela maior
-        hours = 72 if "CORNR" in market_type else 24
+        hours = hours or (72 if "CORNR" in market_type else 24)
         try:
-            markets = self.betfair.list_market_catalogue(
+            markets = self.betfair.list_market_catalogue_complete(
                 filter_dict={
                     "eventTypeIds": [event_type_id],
                     "marketTypeCodes": [market_type],
@@ -549,9 +935,11 @@ JSON:
                     },
                 },
                 market_projection=[
-                    "COMPETITION", "EVENT", "RUNNER_DESCRIPTION", "MARKET_START_TIME",
+                    "COMPETITION", "EVENT", "RUNNER_DESCRIPTION",
+                    "MARKET_START_TIME", "MARKET_DESCRIPTION",
                 ],
-                max_results=80,
+                max_results=200,
+                slice_hours=12,
             )
             found = markets or []
             logger.info("Busca %s (%dh): %d mercado(s)", market_type, hours, len(found))
@@ -563,6 +951,7 @@ JSON:
 
     def _evaluate_market(self, mkt: dict, profile: dict) -> tuple[Optional[Opportunity], Optional[str]]:
         sport = profile.get("sport", "football")
+        market_stake = float(profile.get("stake", self.stake))
         event = mkt.get("event", {})
         comp = mkt.get("competition", {})
         league = comp.get("name", "")
@@ -571,6 +960,13 @@ JSON:
         if tier == "blocked":
             return None, "blocked_league"
         if profile.get("good_league_only") and tier != "good":
+            return None, "blocked_league"
+        if profile.get("use_u45_allowlist") and not u45_league_allowed(league):
+            record_snapshot(
+                profile["key"], mkt, None, None, "",
+                "REJECTED", "u45_league_not_allowed",
+                leg_key=profile.get("leg_key", "goals"),
+            )
             return None, "blocked_league"
 
         home, away = _parse_participants(event.get("name", ""))
@@ -581,21 +977,76 @@ JSON:
         if not book:
             return None, "no_book"
 
-        min_vol = profile.get("min_volume", 0)
-        total_matched = float(book.get("totalMatched", 0) or 0)
-        if min_vol and total_matched < min_vol:
-            return None, "low_volume"
-
         selection = self._pick_selection(mkt, book, profile)
         if not selection:
+            record_snapshot(
+                profile["key"], mkt, book, None, "",
+                "REJECTED", "no_selection",
+                favorite_odds=profile.get("favorite_odds"),
+                leg_key=profile.get("leg_key", profile["key"]),
+            )
             return None, "no_selection"
 
         sel_id, sel_label, odds = selection
+        quality = execution_quality(
+            book,
+            sel_id,
+            market_stake,
+            max_spread_pct=float(profile.get("max_spread_pct", 10)),
+            min_back_size=float(profile.get("min_back_size", 10)),
+        )
+        if not quality.allowed:
+            record_snapshot(
+                profile["key"], mkt, book, sel_id, sel_label,
+                "REJECTED", quality.reason,
+                favorite_odds=profile.get("favorite_odds"),
+                leg_key=profile.get("leg_key", profile["key"]),
+            )
+            return None, "execution_quality"
         min_o, max_o = self._odds_range(profile, league)
         if odds < MIN_GLOBAL_ODDS and profile["key"] not in ("corners_105", "corners_under_105"):
+            record_snapshot(
+                profile["key"], mkt, book, sel_id, sel_label,
+                "REJECTED", "below_global_odds",
+                favorite_odds=profile.get("favorite_odds"),
+                leg_key=profile.get("leg_key", profile["key"]),
+            )
             return None, "wrong_odds"
         if not (min_o <= odds <= max_o):
+            record_snapshot(
+                profile["key"], mkt, book, sel_id, sel_label,
+                "REJECTED", "wrong_odds",
+                favorite_odds=profile.get("favorite_odds"),
+                leg_key=profile.get("leg_key", profile["key"]),
+            )
             return None, "wrong_odds"
+
+        if profile.get("favorite_min_odds") and profile.get("use_u45_allowlist"):
+            event_id = str(event.get("id", ""))
+            match_market, match_book, favorite = self._match_odds_favorite(event_id)
+            threshold = float(profile.get("favorite_min_odds", 1.40))
+            if not self._favorite_allows_u45(favorite, threshold):
+                favorite_odds = float(favorite[2]) if favorite else None
+                reason = (
+                    f"favorite_below_{threshold:.2f}"
+                    if favorite else "favorite_price_unavailable"
+                )
+                record_snapshot(
+                    profile["key"], mkt, book, sel_id, sel_label,
+                    "REJECTED", reason, favorite_odds=favorite_odds,
+                    leg_key=profile.get("leg_key", "goals"),
+                )
+                if match_market:
+                    record_snapshot(
+                        profile["key"], match_market, match_book,
+                        int(favorite[0]) if favorite else None,
+                        str(favorite[1]) if favorite else "",
+                        "REJECTED", reason, favorite_odds=favorite_odds,
+                        leg_key="match_odds_gate",
+                    )
+                return None, "favorite_rejected"
+            profile = dict(profile)
+            profile["favorite_odds"] = float(favorite[2])
 
         if sport == "tennis":
             analysis = self._analyze_groq_tennis(
@@ -603,50 +1054,77 @@ JSON:
             )
             has_stats = False
         else:
-            needs_corners = "corners" in profile.get("key", "") or "esc" in profile.get("label", "").lower()
+            model_key = str(profile.get("model_key") or profile.get("key", ""))
+            needs_corners = (
+                "corner" in model_key
+                or "CORNR" in str(profile.get("market_type", ""))
+                or "esc" in profile.get("label", "").lower()
+            )
             home_stats, away_stats, h2h, has_stats, corner_stats = self._get_stats(
                 home, away, needs_corners,
             )
-            if profile.get("require_stats") and not has_stats:
-                return None, "ia_rejected"
-            analysis = self._analyze_groq_football(
-                profile=profile,
-                home=home,
-                away=away,
-                league=league,
-                odds=odds,
-                selection_label=sel_label,
-                home_stats=home_stats,
-                away_stats=away_stats,
-                h2h=h2h,
-                has_stats=has_stats,
-                corner_stats=corner_stats,
+            missing_stats = (
+                (needs_corners and not _has_corner_expectation(corner_stats))
+                or (not needs_corners and not has_stats)
+            )
+            if profile.get("require_stats") and missing_stats:
+                record_snapshot(
+                    profile["key"], mkt, book, sel_id, sel_label,
+                    "REJECTED", "missing_independent_stats",
+                    favorite_odds=profile.get("favorite_odds"),
+                    leg_key=profile.get("leg_key", profile["key"]),
+                )
+                return None, "model_rejected"
+            analysis = assess_value(
+                profile, odds, book, sel_id,
+                home_stats, away_stats, corner_stats,
             )
 
         if not analysis:
-            return None, "ia_rejected"
+            return None, "model_rejected"
 
         confidence = int(analysis.get("confidence", 0))
-        extra = 2 if not has_stats else 0
-        if tier == "unknown":
-            extra += 2
+        extra = 0
+        if not profile.get("authorize_on_price_band"):
+            extra = 2 if not has_stats else 0
+            if tier == "unknown":
+                extra += 2
         min_conf = profile["min_confidence"] + extra
         if confidence < min_conf:
+            record_snapshot(
+                profile["key"], mkt, book, sel_id, sel_label,
+                "REJECTED", str(analysis.get("reasoning", "confidence")),
+                favorite_odds=profile.get("favorite_odds"),
+                leg_key=profile.get("leg_key", profile["key"]),
+            )
             self._maybe_near_miss(
                 mkt, profile, home, away, league, sel_id, sel_label, odds,
                 confidence, analysis, sport, kickoff=mkt.get("marketStartTime", ""),
             )
-            return None, "ia_rejected"
+            return None, "model_rejected"
 
         if analysis.get("recommend") is False:
+            record_snapshot(
+                profile["key"], mkt, book, sel_id, sel_label,
+                "REJECTED", str(analysis.get("reasoning", "model_rejected")),
+                favorite_odds=profile.get("favorite_odds"),
+                leg_key=profile.get("leg_key", profile["key"]),
+            )
             self._maybe_near_miss(
                 mkt, profile, home, away, league, sel_id, sel_label, odds,
                 confidence, analysis, sport, kickoff=mkt.get("marketStartTime", ""),
             )
-            return None, "ia_rejected"
+            return None, "model_rejected"
 
         kickoff = mkt.get("marketStartTime", "")
-        profit = round(self.stake * (odds - 1), 2)
+        commission = float(profile.get("commission_rate", 0.065))
+        profit = round(market_stake * (odds - 1) * (1 - commission), 2)
+        record_snapshot(
+            profile["key"], mkt, book, sel_id, sel_label,
+            "APPROVED", str(analysis.get("reasoning", "")),
+            favorite_odds=profile.get("favorite_odds"),
+            leg_key=profile.get("leg_key", profile["key"]),
+        )
 
         return Opportunity(
             opp_id=_make_opp_id(mkt["marketId"], sel_id, profile["key"]),
@@ -660,12 +1138,19 @@ JSON:
             selection_id=sel_id,
             selection_label=sel_label,
             odds=odds,
-            stake=self.stake,
+            stake=market_stake,
             confidence=confidence,
             reasoning=str(analysis.get("reasoning", ""))[:400],
             potential_profit=profit,
             kickoff=kickoff,
             sport=sport,
+            event_id=str(event.get("id", "")),
+            model_probability=analysis.get("model_probability"),
+            market_probability=analysis.get("market_probability"),
+            ev_pct=analysis.get("ev_pct"),
+            commission_rate=commission,
+            favorite_odds=profile.get("favorite_odds"),
+            leg_stakes=[market_stake],
         ), None
 
     def _maybe_near_miss(self, mkt, profile, home, away, league, sel_id, sel_label, odds,
@@ -683,8 +1168,10 @@ JSON:
         self, mkt, profile, home, away, league, sel_id, sel_label, odds,
         confidence, analysis, sport, kickoff,
     ) -> Optional[Opportunity]:
-        reason = str(analysis.get("reasoning", "IA não recomendou"))[:400]
-        profit = round(self.stake * (odds - 1), 2)
+        reason = str(analysis.get("reasoning", "Modelo não recomendou"))[:400]
+        market_stake = float(profile.get("stake", self.stake))
+        commission = float(profile.get("commission_rate", 0.065))
+        profit = round(market_stake * (odds - 1) * (1 - commission), 2)
         return Opportunity(
             opp_id=_make_opp_id(mkt["marketId"], sel_id, profile["key"]),
             bet_type=f"⚠️ {profile['label']}",
@@ -697,12 +1184,18 @@ JSON:
             selection_id=sel_id,
             selection_label=sel_label,
             odds=odds,
-            stake=self.stake,
+            stake=market_stake,
             confidence=confidence,
-            reasoning=f"IA cautelosa — revise antes: {reason}",
+            reasoning=f"Modelo rejeitou — apenas para revisão: {reason}",
             potential_profit=profit,
             kickoff=kickoff or mkt.get("marketStartTime", ""),
             sport=sport,
+            event_id=str(mkt.get("event", {}).get("id", "")),
+            model_probability=analysis.get("model_probability"),
+            market_probability=analysis.get("market_probability"),
+            ev_pct=analysis.get("ev_pct"),
+            commission_rate=commission,
+            leg_stakes=[market_stake],
         )
 
     def _pick_selection(
@@ -718,11 +1211,11 @@ JSON:
         target_label = ""
         for rd in runners_desc:
             nm = rd.get("runnerName", "").lower()
-            if hint == "under" and "under" in nm:
+            if hint == "under" and any(word in nm for word in ("under", "menos")):
                 target_id = rd.get("selectionId")
                 target_label = rd.get("runnerName", "Under")
                 break
-            if hint == "over" and "over" in nm:
+            if hint == "over" and any(word in nm for word in ("over", "mais")):
                 target_id = rd.get("selectionId")
                 target_label = rd.get("runnerName", "Over")
                 break
@@ -954,7 +1447,7 @@ Seja conservador. Em tênis, considere superfície, ranking relativo e estilo de
             books = self.betfair.list_market_book(
                 market_ids=[market_id],
                 price_projection={
-                    "priceData": ["EX_BEST_OFFERS"],
+                    "priceData": ["EX_BEST_OFFERS", "EX_TRADED"],
                     "exBestOffersOverrides": {"bestPricesDepth": 3},
                 },
             )

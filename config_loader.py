@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parent
 BOT_CONFIG_PATH = ROOT / "bot_config.ini"
 MODE_FILE = ROOT / "data" / "bot_mode.json"
 STRATEGY_FILE = ROOT / "data" / "active_strategy.json"
+STAKE_FILE = ROOT / "data" / "stake_settings.json"
+MIN_STAKE = 2.0
+MAX_STAKE = 35.0
+STAKE_CONFIRM_ABOVE = 10.0
 
 VALID_MODES = ("off", "manual", "semi", "auto")
 VALID_STRATEGIES = ALL_COMBO_KEYS + ALL_SINGLE_KEYS
@@ -46,7 +50,7 @@ def get_active_strategy() -> str:
             return key
 
     cfg = load_bot_config()
-    raw = cfg.get("bot", "active_strategy", fallback="combo_u45_u105")
+    raw = cfg.get("bot", "active_strategy", fallback="combo_u105_u45")
     return resolve_combo_key(raw)
 
 
@@ -82,7 +86,7 @@ def get_daily_scan_config() -> dict[str, Any]:
         cfg.get(section, "strategy", fallback="combo_u45_u105")
     )
     if strategy not in VALID_STRATEGIES:
-        strategy = "combo_u45_u105"
+        strategy = "combo_u105_u45"
     return {
         "enabled": cfg.getboolean(section, "enabled", fallback=True),
         "time": cfg.get(section, "time", fallback="09:00"),
@@ -108,6 +112,12 @@ def _section_params(section: str, defaults: dict[str, Any]) -> dict[str, Any]:
         if cfg.has_section(section) and cfg.has_option(section, opt):
             return cfg.getfloat(section, opt)
         return defaults.get(opt)
+
+    def _string_list(opt: str) -> tuple[str, ...]:
+        if cfg.has_section(section) and cfg.has_option(section, opt):
+            raw = cfg.get(section, opt)
+            return tuple(value.strip() for value in raw.split(",") if value.strip())
+        return tuple(defaults.get(opt, ()))
 
     return {
         "stake": _float("stake", float(defaults.get("stake", 20.0))),
@@ -136,7 +146,35 @@ def _section_params(section: str, defaults: dict[str, Any]) -> dict[str, Any]:
         "leg1_min_odds": _optional_float("leg1_min_odds"),
         "leg2_min_odds": _optional_float("leg2_min_odds"),
         "leg2_stake_ratio": _optional_float("leg2_stake_ratio"),
+        "corner_stake": _optional_float("corner_stake"),
+        "goal_stake": _optional_float("goal_stake"),
+        "favorite_min_odds": _float(
+            "favorite_min_odds", float(defaults.get("favorite_min_odds", 1.40))
+        ),
+        "u45_leagues": _string_list("u45_leagues"),
         "fallback_single_stake": _optional_float("fallback_single_stake"),
+        "commission_rate": _float(
+            "commission_rate", float(defaults.get("commission_rate", 0.065))
+        ),
+        "max_spread_pct": _float(
+            "max_spread_pct", float(defaults.get("max_spread_pct", 10.0))
+        ),
+        "min_back_size": _float(
+            "min_back_size", float(defaults.get("min_back_size", 10.0))
+        ),
+        "min_ev_pct": _float(
+            "min_ev_pct", float(defaults.get("min_ev_pct", 2.0))
+        ),
+        "min_probability_edge_pct": _float(
+            "min_probability_edge_pct",
+            float(defaults.get("min_probability_edge_pct", 2.0)),
+        ),
+        "max_event_exposure": _float(
+            "max_event_exposure", float(defaults.get("max_event_exposure", 4.0))
+        ),
+        "max_total_exposure": _float(
+            "max_total_exposure", float(defaults.get("max_total_exposure", 8.0))
+        ),
         "fallback_single_enabled": (
             cfg.getboolean(
                 section,
@@ -146,10 +184,37 @@ def _section_params(section: str, defaults: dict[str, Any]) -> dict[str, Any]:
             if cfg.has_section(section)
             else bool(defaults.get("fallback_single_enabled", True))
         ),
+        "live_enabled": (
+            cfg.getboolean(
+                section,
+                "live_enabled",
+                fallback=bool(defaults.get("live_enabled", True)),
+            )
+            if cfg.has_section(section)
+            else bool(defaults.get("live_enabled", True))
+        ),
         "require_stats": (
             cfg.getboolean(section, "require_stats", fallback=bool(defaults.get("require_stats", False)))
             if cfg.has_section(section)
             else bool(defaults.get("require_stats", False))
+        ),
+        "authorize_on_price_band": (
+            cfg.getboolean(
+                section,
+                "authorize_on_price_band",
+                fallback=bool(defaults.get("authorize_on_price_band", False)),
+            )
+            if cfg.has_section(section)
+            else bool(defaults.get("authorize_on_price_band", False))
+        ),
+        "use_u45_allowlist": (
+            cfg.getboolean(
+                section,
+                "use_u45_allowlist",
+                fallback=bool(defaults.get("use_u45_allowlist", False)),
+            )
+            if cfg.has_section(section)
+            else bool(defaults.get("use_u45_allowlist", False))
         ),
     }
 
@@ -180,7 +245,7 @@ def get_strategy_params(strategy_key: str) -> dict[str, Any]:
         return get_single_params(key)
     if is_combo_strategy(key):
         return get_combo_params(key)
-    return get_combo_params("combo_u45_u105")
+    return get_combo_params("combo_u105_u45")
 
 
 def _apply_semi_relaxation(combo: dict[str, Any]) -> None:
@@ -228,7 +293,13 @@ def build_scan_profiles(
     if is_combo_strategy(strategy):
         keys = [strategy]
     else:
-        keys = ["combo_u45_u105"]
+        keys = ["combo_u105_u45"]
+
+    if any(COMBO_DEFINITIONS.get(key, {}).get("independent_legs") for key in keys):
+        return [
+            _build_single_profile("corners_105", relaxed),
+            _build_single_profile("under45", relaxed),
+        ]
 
     profiles: list[dict[str, Any]] = []
     for key in keys:
@@ -240,6 +311,10 @@ def build_scan_profiles(
         combo["filter_mode"] = "semi" if relaxed else "auto"
         combo["leg1_profile"] = leg_profile(combo["leg1"])
         combo["leg2_profile"] = leg_profile(combo["leg2"])
+        stakes = get_stake_settings()
+        combo["corner_stake"] = stakes["corners"]
+        combo["goal_stake"] = stakes["goals"]
+        combo["stake"] = round(stakes["corners"] + stakes["goals"], 2)
         if combo.get("leg1_min_odds") is not None:
             combo["leg1_profile"]["min_odds"] = float(combo["leg1_min_odds"])
         if combo.get("leg2_min_odds") is not None:
@@ -254,6 +329,11 @@ def build_scan_profiles(
 def _build_single_profile(key: str, relaxed: bool) -> dict[str, Any]:
     base = dict(SINGLE_DEFINITIONS[key])
     base.update(get_single_params(key))
+    stakes = get_stake_settings()
+    if key == "corners_105":
+        base["stake"] = stakes["corners"]
+    elif key == "under45":
+        base["stake"] = stakes["goals"]
     if relaxed:
         _apply_single_semi_relaxation(base)
     base["kind"] = "single"
@@ -274,7 +354,44 @@ def _read_json(path: Path, default: dict) -> dict:
 
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    temporary.replace(path)
+
+
+def get_stake_settings() -> dict[str, float]:
+    data = _read_json(STAKE_FILE, {})
+
+    def valid(name: str) -> float:
+        default = 20.0
+        try:
+            value = float(data.get(name, default))
+        except (TypeError, ValueError):
+            value = default
+        return min(MAX_STAKE, max(MIN_STAKE, value))
+
+    return {"corners": valid("corners"), "goals": valid("goals")}
+
+
+def needs_stake_confirmation(value: float) -> bool:
+    return float(value) > STAKE_CONFIRM_ABOVE
+
+
+def parse_stake_value(raw: str) -> float:
+    amount = round(float(str(raw).replace(",", ".")), 2)
+    if not MIN_STAKE <= amount <= MAX_STAKE:
+        raise ValueError(f"Stake deve ficar entre R$ {MIN_STAKE:.0f} e R$ {MAX_STAKE:.0f}")
+    return amount
+
+
+def save_stake(kind: str, value: float) -> dict[str, float]:
+    if kind not in ("corners", "goals"):
+        raise ValueError("Tipo de stake inválido")
+    amount = parse_stake_value(value)
+    settings = get_stake_settings()
+    settings[kind] = amount
+    _write_json(STAKE_FILE, settings)
+    return settings
 
 
 def load_mode() -> str:

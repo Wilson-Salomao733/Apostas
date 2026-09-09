@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from api_football import APIFootball
+from bet_ledger import reconcile_snapshots
 from bet_placement import place_opportunity
 from betfair_api import BetfairAPI
 from config_loader import (
@@ -70,6 +71,7 @@ class AutoWorker:
     def _run_cycle(self, mode: str) -> None:
         try:
             reconcile(self.betfair)
+            reconcile_snapshots(self.betfair)
         except Exception as e:
             logger.warning(f"Reconcile falhou: {e}")
 

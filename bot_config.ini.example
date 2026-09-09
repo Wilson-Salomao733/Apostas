@@ -1,16 +1,34 @@
 [bot]
-active_strategy = combo_u45_u105
+active_strategy = combo_u105_u45
 check_interval = 120
 
 [daily_scan]
 enabled = true
 time = 09:00
-strategy = combo_u45_u105
+strategy = combo_u105_u45
 send_empty = true
 
+[combo_u105_u45]
+; Duas pernas independentes no mesmo ciclo
+corner_stake = 20.0
+goal_stake = 20.0
+favorite_min_odds = 1.40
+min_confidence = 60
+max_concurrent_bets = 2
+daily_loss_limit = 70.0
+daily_profit_target = 100.0
+commission_rate = 0.065
+max_spread_pct = 10.0
+min_back_size = 10.0
+min_ev_pct = 2.0
+min_probability_edge_pct = 2.0
+max_event_exposure = 70.0
+max_total_exposure = 70.0
+live_enabled = true
+
 [combo_u45_u105]
-; Múltipla U4.5 gols + U10.5 esc (fallback só U4.5)
-stake = 40.0
+; Carteira de duas apostas independentes (não é acumulada)
+stake = 4.0
 min_combined_odds = 1.40
 max_combined_odds = 3.50
 leg1_min_odds = 1.15
@@ -19,36 +37,65 @@ leg2_stake_ratio = 0.50
 min_confidence = 60
 min_volume = 300
 min_volume_leg2 = 100
-max_concurrent_bets = 5
-daily_loss_limit = 80.0
-daily_profit_target = 100.0
-fallback_single_enabled = true
-fallback_single_stake = 20.0
+max_concurrent_bets = 2
+daily_loss_limit = 12.0
+daily_profit_target = 20.0
+commission_rate = 0.065
+max_spread_pct = 10.0
+min_back_size = 10.0
+min_ev_pct = 2.0
+min_probability_edge_pct = 2.0
+max_event_exposure = 4.0
+max_total_exposure = 8.0
+live_enabled = false
+fallback_single_enabled = false
+fallback_single_stake = 2.0
 
 [under45]
-; Simples: Menos 4.5 gols
+; Simples: Menos 4.5 gols — só ligas de poucos gols
 stake = 20.0
-min_odds = 1.15
-max_odds = 1.50
+min_odds = 1.30
+max_odds = 1.40
+favorite_min_odds = 1.40
+use_u45_allowlist = true
+require_stats = true
 min_confidence = 60
 min_volume = 300
-max_concurrent_bets = 5
-daily_loss_limit = 80.0
+max_concurrent_bets = 2
+daily_loss_limit = 70.0
 daily_profit_target = 100.0
+commission_rate = 0.065
+max_spread_pct = 8.0
+min_back_size = 10.0
+min_ev_pct = 2.0
+min_probability_edge_pct = 2.0
+max_event_exposure = 35.0
+max_total_exposure = 70.0
+live_enabled = true
 
 [corners_105]
-; Simples: Menos 10.5 escanteios
+; Simples: Menos 10.5 escanteios — faixa 1.40-1.73, spread 10%
 stake = 20.0
-min_odds = 1.20
-max_odds = 2.50
+min_odds = 1.40
+max_odds = 1.73
+authorize_on_price_band = true
+require_stats = false
 min_confidence = 58
 min_volume = 100
-max_concurrent_bets = 5
-daily_loss_limit = 80.0
+max_concurrent_bets = 2
+daily_loss_limit = 70.0
 daily_profit_target = 100.0
+commission_rate = 0.065
+max_spread_pct = 10.0
+min_back_size = 10.0
+min_ev_pct = 2.0
+min_probability_edge_pct = 2.0
+max_event_exposure = 35.0
+max_total_exposure = 70.0
+live_enabled = true
 
 [manual]
-stake = 20.0
+stake = 2.0
 
 [api_keys]
 api_football_key = SEU_API_FOOTBALL_KEY

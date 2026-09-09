@@ -26,10 +26,14 @@ from config_loader import (
     VALID_STRATEGIES,
     combo_label,
     get_active_strategy,
+    get_stake_settings,
     get_telegram_creds,
     load_mode,
+    needs_stake_confirmation,
+    parse_stake_value,
     resolve_combo_key,
     save_mode,
+    save_stake,
     save_strategy,
 )
 from opportunity_scanner import Opportunity, OpportunityScanner
@@ -89,6 +93,7 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📊 Status", callback_data="status"),
+            InlineKeyboardButton("💵 Valores", callback_data="stakes"),
         ],
         [
             InlineKeyboardButton("👆 Manual", callback_data="mode:manual"),
@@ -97,6 +102,12 @@ def main_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("🤖 Auto", callback_data="mode:auto"),
             InlineKeyboardButton("⏹ Parar", callback_data="mode:off"),
+        ],
+        [
+            InlineKeyboardButton(
+                mark("combo_u105_u45", "U10.5 e U4.5 indep."),
+                callback_data="strat:combo_u105_u45",
+            ),
         ],
         [
             InlineKeyboardButton(
@@ -120,11 +131,53 @@ def main_keyboard() -> InlineKeyboardMarkup:
 MENU_TEXT = (
     "🤖 <b>Bot de Apostas</b> (Betfair Exchange)\n\n"
     "Estratégias:\n"
-    "• <b>U4.5+U10.5</b> — múltipla (fallback só U4.5 se faltar esc)\n"
+    "• <b>U10.5 e U4.5 indep.</b> — escanteios por preço; gols só em ligas de poucos gols\n"
+    "• <b>U4.5+U10.5</b> — carteira de duas apostas independentes\n"
     "• <b>Só U4.5 gols</b> — aposta simples\n"
     "• <b>Só U10.5 esc</b> — aposta simples\n\n"
     "👆 Manual | 🔔 Semi | 🤖 Auto\n"
 )
+
+
+def stake_keyboard() -> InlineKeyboardMarkup:
+    current = get_stake_settings()
+    rows: list[list[InlineKeyboardButton]] = []
+    for kind, label in (("corners", "U10.5 esc"), ("goals", "U4.5 gols")):
+        rows.append([InlineKeyboardButton(
+            f"{label}: R$ {current[kind]:.2f}", callback_data="noop",
+        )])
+        values = (2, 5, 10, 15, 20, 25, 30, 35)
+        for start in (0, 4):
+            rows.append([
+                InlineKeyboardButton(
+                    f"R$ {value}", callback_data=f"stake:choose:{kind}:{value}",
+                )
+                for value in values[start:start + 4]
+            ])
+    rows.append([InlineKeyboardButton("⬅️ Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _stakes_text() -> str:
+    stakes = get_stake_settings()
+    return (
+        "💵 <b>Valores por aposta</b>\n\n"
+        f"U10.5 escanteios: <b>R$ {stakes['corners']:.2f}</b>\n"
+        f"U4.5 gols: <b>R$ {stakes['goals']:.2f}</b>\n"
+        "Limite diário: <b>R$ 70,00</b>\n\n"
+        "Use os botões ou /stake_corners VALOR e /stake_goals VALOR."
+    )
+
+
+def _stake_confirmation(kind: str, value: float) -> InlineKeyboardMarkup:
+    label = "U10.5 escanteios" if kind == "corners" else "U4.5 gols"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            f"Confirmar {label}: R$ {value:.2f}",
+            callback_data=f"stake:confirm:{kind}:{value:.2f}",
+        )],
+        [InlineKeyboardButton("Cancelar", callback_data="stakes")],
+    ])
 
 
 def _opp_keyboard(opp: Opportunity) -> InlineKeyboardMarkup:
@@ -146,10 +199,15 @@ def _format_opp(opp: Opportunity) -> str:
         f"🏆 {opp.league}",
     ]
     if opp.legs:
-        lines.append("<b>2 condições (ambas devem bater):</b>")
-        for leg in opp.legs:
-            lines.append(f"  • {leg.get('label', '')}")
-        lines.append(f"📈 Odd combinada: <b>{opp.combined_odds or opp.odds:.2f}</b>")
+        lines.append("<b>2 apostas independentes no mesmo evento:</b>")
+        for index, leg in enumerate(opp.legs):
+            leg_stake = (
+                opp.leg_stakes[index]
+                if index < len(opp.leg_stakes)
+                else leg.get("stake")
+            )
+            stake_text = f" — R$ {float(leg_stake):.2f}" if leg_stake is not None else ""
+            lines.append(f"  • {leg.get('label', '')}{stake_text}")
     else:
         lines.append(f"📊 {opp.selection_label} @ <b>{opp.odds:.2f}</b>")
     lines.extend([
@@ -210,6 +268,45 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+def _parse_stake_arg(context: ContextTypes.DEFAULT_TYPE) -> float:
+    if not context.args:
+        raise ValueError("Informe um valor entre R$2 e R$35")
+    return parse_stake_value(context.args[0])
+
+
+async def _stake_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    kind: str,
+) -> None:
+    if not _guard(update) or not update.message:
+        return
+    try:
+        value = _parse_stake_arg(context)
+    except (TypeError, ValueError) as exc:
+        await update.message.reply_text(f"⚠️ {exc}")
+        return
+    if needs_stake_confirmation(value):
+        await update.message.reply_text(
+            f"Confirme o novo valor de R$ {value:.2f}.",
+            reply_markup=_stake_confirmation(kind, value),
+        )
+        return
+    save_stake(kind, value)
+    await update.message.reply_text(
+        f"✅ Valor atualizado para R$ {value:.2f}.",
+        reply_markup=stake_keyboard(),
+    )
+
+
+async def cmd_stake_corners(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _stake_command(update, context, "corners")
+
+
+async def cmd_stake_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _stake_command(update, context, "goals")
+
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _guard(update):
         return
@@ -218,6 +315,42 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data = query.data or ""
 
     if data == "noop":
+        return
+
+    if data == "menu":
+        await query.edit_message_text(
+            MENU_TEXT, parse_mode="HTML", reply_markup=main_keyboard(),
+        )
+        return
+
+    if data == "stakes":
+        await query.edit_message_text(
+            _stakes_text(), parse_mode="HTML", reply_markup=stake_keyboard(),
+        )
+        return
+
+    if data.startswith("stake:choose:"):
+        _, _, kind, raw_value = data.split(":", 3)
+        value = float(raw_value)
+        if needs_stake_confirmation(value):
+            await query.edit_message_text(
+                f"⚠️ Confirme o valor de <b>R$ {value:.2f}</b>.",
+                parse_mode="HTML",
+                reply_markup=_stake_confirmation(kind, value),
+            )
+        else:
+            save_stake(kind, value)
+            await query.edit_message_text(
+                _stakes_text(), parse_mode="HTML", reply_markup=stake_keyboard(),
+            )
+        return
+
+    if data.startswith("stake:confirm:"):
+        _, _, kind, raw_value = data.split(":", 3)
+        save_stake(kind, float(raw_value))
+        await query.edit_message_text(
+            _stakes_text(), parse_mode="HTML", reply_markup=stake_keyboard(),
+        )
         return
 
     if data == "scan":
@@ -266,7 +399,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             elif key == "corners_105":
                 hint = "\n\n💡 Aposta só Under 10.5 escanteios."
             elif key == "combo_u45_u105":
-                hint = "\n\n🎯 Múltipla U4.5 + U10.5 (fallback U4.5 se faltar esc)."
+                hint = "\n\nCarteira U4.5 + U10.5 com duas ordens independentes."
+            elif key == "combo_u105_u45":
+                hint = (
+                    "\n\nDuas pernas independentes: U10.5 na faixa 1.40–1.73 "
+                    "com spread até 10%. U4.5 só em ligas de poucos gols "
+                    "e favorito ≥ 1.40."
+                )
             await query.edit_message_text(
                 f"Estratégia: <b>{combo_label(key)}</b>{hint}",
                 parse_mode="HTML",
@@ -298,7 +437,7 @@ async def _send_scan_results(chat_id: int, opps: list, stats: dict) -> None:
             msg += f"Mercados analisados: ~{mkts}"
         await _send(chat_id, msg)
         return
-    note = " (⚠️ candidatos — IA cautelosa)" if stats.get("fallback") else ""
+    note = " (candidatos rejeitados — somente revisão)" if stats.get("fallback") else ""
     await _send(chat_id, f"✅ <b>{len(opps)} oportunidade(s)</b>{note}")
     for opp in opps:
         await _send(chat_id, _format_opp(opp), _opp_keyboard(opp))
@@ -374,6 +513,8 @@ def main() -> None:
     )
     _app.add_handler(CommandHandler("start", cmd_start))
     _app.add_handler(CommandHandler("menu", cmd_start))
+    _app.add_handler(CommandHandler("stake_corners", cmd_stake_corners))
+    _app.add_handler(CommandHandler("stake_goals", cmd_stake_goals))
     _app.add_handler(CallbackQueryHandler(on_callback))
     _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
