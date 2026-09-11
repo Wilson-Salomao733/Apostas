@@ -14,16 +14,16 @@ corner_stake = 20.0
 goal_stake = 20.0
 favorite_min_odds = 1.40
 min_confidence = 60
-max_concurrent_bets = 2
-daily_loss_limit = 70.0
-daily_profit_target = 100.0
+max_concurrent_bets = 0
+daily_loss_limit = 400.0
+daily_profit_target = 400.0
 commission_rate = 0.065
 max_spread_pct = 10.0
 min_back_size = 10.0
 min_ev_pct = 2.0
 min_probability_edge_pct = 2.0
-max_event_exposure = 70.0
-max_total_exposure = 70.0
+max_event_exposure = 40.0
+max_total_exposure = 400.0
 live_enabled = true
 
 [combo_u45_u105]
@@ -61,16 +61,16 @@ use_u45_allowlist = true
 require_stats = true
 min_confidence = 60
 min_volume = 300
-max_concurrent_bets = 2
-daily_loss_limit = 70.0
-daily_profit_target = 100.0
+max_concurrent_bets = 0
+daily_loss_limit = 400.0
+daily_profit_target = 400.0
 commission_rate = 0.065
 max_spread_pct = 8.0
 min_back_size = 10.0
 min_ev_pct = 2.0
 min_probability_edge_pct = 2.0
-max_event_exposure = 35.0
-max_total_exposure = 70.0
+max_event_exposure = 40.0
+max_total_exposure = 400.0
 live_enabled = true
 
 [corners_105]
@@ -82,16 +82,16 @@ authorize_on_price_band = true
 require_stats = false
 min_confidence = 58
 min_volume = 100
-max_concurrent_bets = 2
-daily_loss_limit = 70.0
-daily_profit_target = 100.0
+max_concurrent_bets = 0
+daily_loss_limit = 400.0
+daily_profit_target = 400.0
 commission_rate = 0.065
 max_spread_pct = 10.0
 min_back_size = 10.0
 min_ev_pct = 2.0
 min_probability_edge_pct = 2.0
-max_event_exposure = 35.0
-max_total_exposure = 70.0
+max_event_exposure = 40.0
+max_total_exposure = 400.0
 live_enabled = true
 
 [manual]

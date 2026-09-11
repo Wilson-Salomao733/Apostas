@@ -22,7 +22,12 @@ from config_loader import (
     get_manual_stake,
     load_mode,
 )
-from opportunity_scanner import Opportunity, OpportunityScanner
+from opportunity_scanner import (
+    Opportunity,
+    OpportunityScanner,
+    mark_override_notified,
+    was_override_notified,
+)
 from risk_manager import can_bet, reconcile
 
 logger = logging.getLogger(__name__)
@@ -92,7 +97,7 @@ class AutoWorker:
         for opp in opps:
             if opp.opp_id in self._notified_ids and mode == "semi":
                 continue
-            if "⚠️" in opp.bet_type:
+            if "⚠️" in opp.bet_type or opp.manual_override:
                 continue
 
             ok, reason = can_bet(opp)
@@ -106,8 +111,34 @@ class AutoWorker:
             else:
                 self._place_auto(opp)
 
+        self._notify_quality_overrides(scanner.last_quality_overrides)
+
         if len(self._notified_ids) > 200:
             self._notified_ids.clear()
+
+    def _notify_quality_overrides(self, overrides: list[Opportunity]) -> int:
+        """Mercados de escanteios fora dos filtros → Telegram com Apostar/Ignorar."""
+        sent = 0
+        for opp in overrides:
+            if was_override_notified(opp.opp_id) or opp.opp_id in self._notified_ids:
+                continue
+            ok, reason = can_bet(opp)
+            if not ok:
+                soft = any(
+                    token in reason.lower()
+                    for token in ("probabilidade", "ev abaixo", "avaliação")
+                )
+                if not soft:
+                    logger.info(
+                        "Override skip %s x %s: %s",
+                        opp.home, opp.away, reason,
+                    )
+                    continue
+            self._notified_ids.add(opp.opp_id)
+            mark_override_notified(opp.opp_id, opp.kickoff)
+            self.on_opportunity_semi(opp)
+            sent += 1
+        return sent
 
     def _place_auto(self, opp: Opportunity) -> None:
         ok, msg = place_opportunity(self.betfair, opp.to_dict(), ref_prefix="BOT")
@@ -181,7 +212,7 @@ class AutoWorker:
         sent = 0
 
         for opp in opps:
-            if "⚠️" in opp.bet_type:
+            if "⚠️" in opp.bet_type or opp.manual_override:
                 continue
             ok, reason = can_bet(opp)
             if not ok:
@@ -190,6 +221,8 @@ class AutoWorker:
             self._notified_ids.add(opp.opp_id)
             self.on_opportunity_semi(opp)
             sent += 1
+
+        sent += self._notify_quality_overrides(scanner.last_quality_overrides)
 
         if sent:
             self.on_notify(
@@ -218,4 +251,8 @@ class AutoWorker:
             active_strategy=get_active_strategy(),
             filter_mode="manual",
         )
-        return scanner.scan(), scanner.last_stats
+        opps = scanner.scan()
+        overrides = list(scanner.last_quality_overrides)
+        stats = dict(scanner.last_stats)
+        stats["quality_overrides"] = len(overrides)
+        return opps + overrides, stats

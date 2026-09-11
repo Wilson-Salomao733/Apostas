@@ -5,8 +5,9 @@ import os
 import sys
 import uuid
 from configparser import ConfigParser
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -21,6 +22,27 @@ from betfair_api import BetfairAPI
 from opportunity_scanner import Opportunity, OpportunityScanner
 
 OFFSET_FILE = ROOT / "data" / "telegram_offset.txt"
+
+
+def _format_kickoff(kickoff: str) -> str:
+    raw = (kickoff or "").strip()
+    if not raw:
+        return "horário indisponível"
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        try:
+            local = dt.astimezone(ZoneInfo("America/Sao_Paulo"))
+        except Exception:
+            from datetime import timedelta
+            local = dt.astimezone(timezone.utc).astimezone(
+                timezone(timedelta(hours=-3))
+            )
+        weekdays = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
+        return f"{weekdays[local.weekday()]} {local.strftime('%d/%m %H:%M')}"
+    except Exception:
+        return raw[:19]
 
 MAIN_INLINE = {
     "inline_keyboard": [
@@ -217,8 +239,10 @@ def run_scan(chat_id: str) -> None:
             f"{risk} <b>{opp.bet_type}</b>\n\n"
             f"⚽ <b>{opp.home}</b> x <b>{opp.away}</b>\n"
             f"🏆 {opp.league}\n"
+            f"🕒 Jogo: <b>{_format_kickoff(opp.kickoff)}</b>\n"
             f"📊 {opp.selection_label} @ <b>{opp.odds:.2f}</b>\n"
-            f"💵 Stake R$ {opp.stake:.0f} → Lucro R$ {opp.potential_profit:.2f}\n"
+            f"💵 Apostar R$ {opp.stake:.0f}\n"
+            f"💰 Se ganhar: <b>~R$ {opp.potential_profit:.2f}</b> de lucro\n"
             f"🤖 IA: {opp.confidence}%\n"
             f"💬 <i>{opp.reasoning}</i>"
         )

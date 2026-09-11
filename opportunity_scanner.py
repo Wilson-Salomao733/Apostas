@@ -86,10 +86,26 @@ class Opportunity:
     market_probability: float | None = None
     ev_pct: float | None = None
     commission_rate: float = 0.065
+    manual_override: bool = False
+    reject_reason: str = ""
+    back_size: float | None = None
+    lay_price: float | None = None
+    spread_pct: float | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+# Rejeições de qualidade em escanteios → Telegram com Apostar/Ignorar
+QUALITY_OVERRIDE_REASONS = frozenset({
+    "spread_too_wide",
+    "insufficient_back_size",
+    "wrong_odds",
+})
+CORNERS_OVERRIDE_KEYS = frozenset({"corners_105", "corners_under_105"})
+OVERRIDE_NOTIFY_FILE = os.path.join("data", "notified_overrides.json")
+MAX_QUALITY_OVERRIDES = 8
 
 
 def _is_world_cup(league: str) -> bool:
@@ -148,6 +164,76 @@ def _make_opp_id(market_id: str, selection_id: int, bet_key: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:10]
 
 
+def _override_expires_at(kickoff: str) -> str:
+    try:
+        if kickoff:
+            kick = datetime.fromisoformat(kickoff.replace("Z", "+00:00"))
+            return (kick + timedelta(hours=2)).isoformat()
+    except Exception:
+        pass
+    return (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
+
+
+def load_override_notified() -> dict:
+    if not os.path.exists(OVERRIDE_NOTIFY_FILE):
+        return {}
+    try:
+        with open(OVERRIDE_NOTIFY_FILE, encoding="utf-8") as handle:
+            store = json.load(handle)
+        now = datetime.now(timezone.utc)
+        cleaned = {}
+        for key, meta in (store or {}).items():
+            expires = str((meta or {}).get("expires_at", ""))
+            try:
+                if expires and datetime.fromisoformat(expires) < now:
+                    continue
+            except Exception:
+                pass
+            cleaned[key] = meta
+        return cleaned
+    except Exception:
+        return {}
+
+
+def save_override_notified(store: dict) -> None:
+    os.makedirs("data", exist_ok=True)
+    with open(OVERRIDE_NOTIFY_FILE, "w", encoding="utf-8") as handle:
+        json.dump(store, handle, indent=2, ensure_ascii=False)
+
+
+def was_override_notified(opp_id: str) -> bool:
+    return opp_id in load_override_notified()
+
+
+def mark_override_notified(opp_id: str, kickoff: str = "", ignored: bool = False) -> None:
+    store = load_override_notified()
+    store[opp_id] = {
+        "expires_at": _override_expires_at(kickoff),
+        "ignored": bool(ignored),
+        "marked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_override_notified(store)
+
+
+def _quality_reason_label(
+    reason: str,
+    odds: float,
+    spread_pct: float | None,
+    back_size: float | None,
+    min_odds: float,
+    max_odds: float,
+) -> str:
+    if reason == "spread_too_wide":
+        spread_txt = f"{spread_pct:.1f}%" if spread_pct is not None else "?"
+        return f"Spread largo ({spread_txt})"
+    if reason == "insufficient_back_size":
+        size_txt = f"R$ {back_size:.0f}" if back_size is not None else "?"
+        return f"Liquidez baixa (back {size_txt})"
+    if reason == "wrong_odds":
+        return f"Odd fora da faixa ({odds:.2f}; alvo {min_odds:.2f}–{max_odds:.2f})"
+    return reason.replace("_", " ")
+
+
 class OpportunityScanner:
     def __init__(
         self,
@@ -172,6 +258,8 @@ class OpportunityScanner:
         self.max_results = int(os.getenv("SCAN_MAX_RESULTS", "10"))
         self.last_stats: dict = {}
         self._near_misses: List[Opportunity] = []
+        self._quality_overrides: List[Opportunity] = []
+        self.last_quality_overrides: List[Opportunity] = []
         self._betfair_error: str | None = None
 
     @staticmethod
@@ -192,6 +280,8 @@ class OpportunityScanner:
         )
         candidates: List[Opportunity] = []
         self._near_misses = []
+        self._quality_overrides = []
+        self.last_quality_overrides = []
         self._betfair_error = None
         stats: dict = {
             "markets_total": 0,
@@ -200,6 +290,7 @@ class OpportunityScanner:
             "low_volume": 0,
             "model_rejected": 0,
             "model_analyzed": 0,
+            "quality_overrides": 0,
         }
 
         for profile in profiles:
@@ -254,9 +345,17 @@ class OpportunityScanner:
         )
         if stats.get("markets_total", 0) == 0 and self._betfair_error:
             stats["betfair_error"] = self._betfair_error
+        overrides = self._select_quality_overrides(self._quality_overrides)
+        self.last_quality_overrides = overrides
+        stats["quality_overrides"] = len(overrides)
         self.last_stats = stats
-        self._save_pending(results)
-        logger.info("Varredura concluída: %d oportunidade(s) | stats=%s", len(results), stats)
+        self._save_pending(results + overrides)
+        logger.info(
+            "Varredura concluída: %d oportunidade(s) + %d override(s) | stats=%s",
+            len(results),
+            len(overrides),
+            stats,
+        )
         return results
 
     def _prioritize_markets(self, markets: List[dict], sport: str) -> List[dict]:
@@ -1002,6 +1101,13 @@ JSON:
                 favorite_odds=profile.get("favorite_odds"),
                 leg_key=profile.get("leg_key", profile["key"]),
             )
+            self._maybe_quality_override(
+                mkt, profile, home, away, league, sel_id, sel_label,
+                quality.back_price or odds, quality.reason,
+                back_size=quality.back_size,
+                lay_price=quality.lay_price,
+                spread_pct=quality.spread_pct,
+            )
             return None, "execution_quality"
         min_o, max_o = self._odds_range(profile, league)
         if odds < MIN_GLOBAL_ODDS and profile["key"] not in ("corners_105", "corners_under_105"):
@@ -1018,6 +1124,13 @@ JSON:
                 "REJECTED", "wrong_odds",
                 favorite_odds=profile.get("favorite_odds"),
                 leg_key=profile.get("leg_key", profile["key"]),
+            )
+            self._maybe_quality_override(
+                mkt, profile, home, away, league, sel_id, sel_label,
+                odds, "wrong_odds",
+                back_size=quality.back_size,
+                lay_price=quality.lay_price,
+                spread_pct=quality.spread_pct,
             )
             return None, "wrong_odds"
 
@@ -1163,6 +1276,116 @@ JSON:
         )
         if nm:
             self._near_misses.append(nm)
+
+    def _maybe_quality_override(
+        self,
+        mkt: dict,
+        profile: dict,
+        home: str,
+        away: str,
+        league: str,
+        sel_id: int,
+        sel_label: str,
+        odds: float,
+        reason: str,
+        *,
+        back_size: float | None = None,
+        lay_price: float | None = None,
+        spread_pct: float | None = None,
+    ) -> None:
+        if profile.get("key") not in CORNERS_OVERRIDE_KEYS:
+            return
+        if reason not in QUALITY_OVERRIDE_REASONS:
+            return
+        if not odds or odds <= 1.01:
+            return
+        opp = self._quality_override_from(
+            mkt, profile, home, away, league, sel_id, sel_label, odds, reason,
+            back_size=back_size, lay_price=lay_price, spread_pct=spread_pct,
+        )
+        if opp and not was_override_notified(opp.opp_id):
+            self._quality_overrides.append(opp)
+
+    def _quality_override_from(
+        self,
+        mkt: dict,
+        profile: dict,
+        home: str,
+        away: str,
+        league: str,
+        sel_id: int,
+        sel_label: str,
+        odds: float,
+        reason: str,
+        *,
+        back_size: float | None = None,
+        lay_price: float | None = None,
+        spread_pct: float | None = None,
+    ) -> Optional[Opportunity]:
+        market_stake = float(profile.get("stake", self.stake))
+        commission = float(profile.get("commission_rate", 0.065))
+        profit = round(market_stake * (odds - 1) * (1 - commission), 2)
+        min_o = float(profile.get("min_odds", 1.40))
+        max_o = float(profile.get("max_odds", 1.73))
+        reason_label = _quality_reason_label(
+            reason, odds, spread_pct, back_size, min_o, max_o,
+        )
+        details = [
+            f"Motivo: {reason_label}",
+            f"Back @{odds:.2f}",
+        ]
+        if lay_price:
+            details.append(f"Lay @{lay_price:.2f}")
+        if spread_pct is not None:
+            details.append(f"Spread {spread_pct:.1f}%")
+        if back_size is not None:
+            details.append(f"Liquidez back R$ {back_size:.0f}")
+        details.append("Bot não apostou sozinho — confirme se quiser entrar.")
+        kickoff = mkt.get("marketStartTime", "")
+        return Opportunity(
+            opp_id=_make_opp_id(mkt["marketId"], sel_id, f"{profile['key']}:override"),
+            bet_type=f"🔧 Override · {profile['label']}",
+            bet_key=profile["key"],
+            risk="médio",
+            home=home,
+            away=away,
+            league=league,
+            market_id=mkt["marketId"],
+            selection_id=sel_id,
+            selection_label=sel_label,
+            odds=float(odds),
+            stake=market_stake,
+            confidence=50,
+            reasoning=" | ".join(details)[:400],
+            potential_profit=profit,
+            kickoff=kickoff,
+            sport=profile.get("sport", "football"),
+            event_id=str(mkt.get("event", {}).get("id", "")),
+            commission_rate=commission,
+            leg_stakes=[market_stake],
+            manual_override=True,
+            reject_reason=reason,
+            back_size=float(back_size) if back_size is not None else None,
+            lay_price=float(lay_price) if lay_price else None,
+            spread_pct=float(spread_pct) if spread_pct is not None else None,
+        )
+
+    def _select_quality_overrides(self, overrides: List[Opportunity]) -> List[Opportunity]:
+        if not overrides:
+            return []
+        unique: dict[str, Opportunity] = {}
+        for opp in overrides:
+            unique[opp.opp_id] = opp
+
+        def sort_key(opp: Opportunity) -> tuple:
+            tier = _league_tier(opp.league, opp.sport)
+            tier_rank = 0 if tier == "good" else 1
+            # Prefer odds closer to the usual corners band midpoint (~1.56)
+            distance = abs(float(opp.odds) - 1.56)
+            return (tier_rank, distance, -(opp.back_size or 0))
+
+        ranked = sorted(unique.values(), key=sort_key)
+        return ranked[:MAX_QUALITY_OVERRIDES]
 
     def _near_miss_from(
         self, mkt, profile, home, away, league, sel_id, sel_label, odds,

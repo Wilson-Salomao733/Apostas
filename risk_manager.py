@@ -112,7 +112,11 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     params = get_strategy_params(key)
     model_probability = _opp_field(opp, "model_probability")
     ev_pct = _opp_field(opp, "ev_pct")
-    price_band = bool(params.get("authorize_on_price_band")) or key == "corners_105"
+    price_band = (
+        bool(params.get("authorize_on_price_band"))
+        or key == "corners_105"
+        or bool(_opp_field(opp, "manual_override"))
+    )
     if not price_band:
         if model_probability is None or ev_pct is None:
             return False, "Sem avaliação determinística de probabilidade/EV"
@@ -126,17 +130,8 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
     if pl >= params["daily_profit_target"]:
         return False, f"Meta de lucro diária atingida (R$ {params['daily_profit_target']:.0f})"
 
-    open_count = open_bets_count(key)
-    if key == "corners_105":
-        open_count += open_bets_count("corners_under_105")
-    if key == "combo_u45_u105":
-        open_count += open_bets_count("under45")  # fallback conta junto
-    if key == "combo_u105_u45":
-        open_count += open_bets_count("corners_105")
-        open_count += open_bets_count("under45")
-    if open_count >= params["max_concurrent_bets"]:
-        return False, f"Máximo de apostas abertas ({params['max_concurrent_bets']})"
-
+    # Sem teto de concurrent: se o mercado/EV passar, entra.
+    # Anti-duplicata: não reabre o mesmo market_id enquanto houver aposta open.
     store = load_active_bets()
     open_bets = [bet for bet in store.get("bets", []) if bet.get("status") == "open"]
     total_exposure = sum(float(bet.get("stake", 0) or 0) for bet in open_bets)
@@ -145,26 +140,7 @@ def can_bet(opp: Any, strategy_key: str | None = None) -> tuple[bool, str]:
         return False, f"Risco aberto excederia a perda diária de R$ {params['daily_loss_limit']:.0f}"
     if total_exposure + new_stake > float(params.get("max_total_exposure", 8.0)):
         return False, "Exposição total máxima atingida"
-    event_id = str(_opp_field(opp, "event_id", "") or "")
-    event_name = (
-        str(_opp_field(opp, "home", "")),
-        str(_opp_field(opp, "away", "")),
-    )
-    event_exposure = sum(
-        float(bet.get("stake", 0) or 0)
-        for bet in open_bets
-        if (
-            event_id
-            and str(bet.get("event_id", "")) == event_id
-        ) or (
-            not event_id
-            and (str(bet.get("home", "")), str(bet.get("away", ""))) == event_name
-        )
-    )
-    if event_exposure + new_stake > float(params.get("max_event_exposure", 4.0)):
-        return False, "Exposição máxima por evento atingida"
 
-    opp_id = _opp_field(opp, "opp_id")
     market_ids = {_opp_field(opp, "market_id")}
     legs = _opp_field(opp, "legs") or []
     for leg in legs:

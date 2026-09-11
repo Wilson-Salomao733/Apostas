@@ -6,7 +6,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -36,7 +38,11 @@ from config_loader import (
     save_stake,
     save_strategy,
 )
-from opportunity_scanner import Opportunity, OpportunityScanner
+from opportunity_scanner import (
+    Opportunity,
+    OpportunityScanner,
+    mark_override_notified,
+)
 from risk_manager import can_bet, status_summary
 
 ROOT = Path(__file__).resolve().parent
@@ -180,23 +186,77 @@ def _stake_confirmation(kind: str, value: float) -> InlineKeyboardMarkup:
     ])
 
 
+def _format_kickoff(kickoff: str) -> str:
+    """Horário do jogo em America/Sao_Paulo (ex: sex 11/09 15:45)."""
+    raw = (kickoff or "").strip()
+    if not raw:
+        return "horário indisponível"
+    try:
+        text = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        try:
+            local = dt.astimezone(ZoneInfo("America/Sao_Paulo"))
+        except Exception:
+            # Windows sem pacote tzdata: Brasil sem DST = UTC-3
+            local = dt.astimezone(timezone.utc).astimezone(
+                timezone(timedelta(hours=-3))
+            )
+        weekdays = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
+        return f"{weekdays[local.weekday()]} {local.strftime('%d/%m %H:%M')}"
+    except Exception:
+        return raw[:19]
+
+
 def _opp_keyboard(opp: Opportunity) -> InlineKeyboardMarkup:
+    ignore_data = f"ignore:{opp.opp_id}" if opp.manual_override else "noop"
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(
             f"✅ Apostar R$ {opp.stake:.0f}",
             callback_data=f"bet:{opp.opp_id}",
         ),
-        InlineKeyboardButton("❌ Ignorar", callback_data="noop"),
+        InlineKeyboardButton("❌ Ignorar", callback_data=ignore_data),
     ]])
 
 
 def _format_opp(opp: Opportunity) -> str:
     risk = {"baixo": "🟢", "médio": "🟡"}.get(opp.risk, "⚪")
+    kickoff_txt = _format_kickoff(getattr(opp, "kickoff", "") or "")
+    profit = float(getattr(opp, "potential_profit", 0) or 0)
+    stake = float(getattr(opp, "stake", 0) or 0)
+
+    if opp.manual_override:
+        lines = [
+            "⚠️ <b>Mercado encontrado — filtros não passaram</b>",
+            f"{risk} <b>{opp.bet_type}</b>",
+            "",
+            f"⚽ <b>{opp.home}</b> x <b>{opp.away}</b>",
+            f"🏆 {opp.league}",
+            f"🕒 Jogo: <b>{kickoff_txt}</b>",
+            f"📊 {opp.selection_label} @ <b>{opp.odds:.2f}</b>",
+        ]
+        if opp.lay_price:
+            lines.append(f"📉 Lay @ {opp.lay_price:.2f}")
+        if opp.spread_pct is not None:
+            lines.append(f"📐 Spread {opp.spread_pct:.1f}%")
+        if opp.back_size is not None:
+            lines.append(f"💧 Liquidez back R$ {opp.back_size:.0f}")
+        lines.extend([
+            f"💵 Apostar R$ {stake:.0f}",
+            f"💰 Se ganhar: <b>~R$ {profit:.2f}</b> de lucro",
+            f"💬 <i>{opp.reasoning}</i>",
+            "",
+            "Toque em <b>Apostar</b> se quiser entrar mesmo assim.",
+        ])
+        return "\n".join(lines)
+
     lines = [
         f"{risk} <b>{opp.bet_type}</b>",
         "",
         f"⚽ <b>{opp.home}</b> x <b>{opp.away}</b>",
         f"🏆 {opp.league}",
+        f"🕒 Jogo: <b>{kickoff_txt}</b>",
     ]
     if opp.legs:
         lines.append("<b>2 apostas independentes no mesmo evento:</b>")
@@ -211,7 +271,8 @@ def _format_opp(opp: Opportunity) -> str:
     else:
         lines.append(f"📊 {opp.selection_label} @ <b>{opp.odds:.2f}</b>")
     lines.extend([
-        f"💵 Stake total R$ {opp.stake:.0f} → Lucro ~R$ {opp.potential_profit:.2f}",
+        f"💵 Apostar R$ {stake:.0f}",
+        f"💰 Se ganhar: <b>~R$ {profit:.2f}</b> de lucro",
         f"🤖 IA: {opp.confidence}%",
         f"💬 <i>{opp.reasoning}</i>",
     ])
@@ -240,8 +301,13 @@ def _sync_notify(text: str, _markup: dict | None) -> None:
 def _sync_notify_opp(opp: Opportunity) -> None:
     chat = _allowed_chat()
     if _main_loop and chat:
+        title = (
+            "⚠️ <b>Confirmação manual</b>"
+            if opp.manual_override
+            else "🔔 <b>Oportunidade</b>"
+        )
         asyncio.run_coroutine_threadsafe(
-            _send(chat, f"🔔 <b>Oportunidade</b>\n\n{_format_opp(opp)}", _opp_keyboard(opp)),
+            _send(chat, f"{title}\n\n{_format_opp(opp)}", _opp_keyboard(opp)),
             _main_loop,
         )
 
@@ -315,6 +381,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data = query.data or ""
 
     if data == "noop":
+        return
+
+    if data.startswith("ignore:"):
+        opp_id = data.split(":", 1)[1]
+        pending = OpportunityScanner.load_pending(opp_id) or {}
+        mark_override_notified(opp_id, str(pending.get("kickoff", "")), ignored=True)
+        await query.edit_message_text(
+            "⏭ Ignorado — não vou reenviar este mercado.",
+            reply_markup=main_keyboard(),
+        )
         return
 
     if data == "menu":
@@ -437,9 +513,19 @@ async def _send_scan_results(chat_id: int, opps: list, stats: dict) -> None:
             msg += f"Mercados analisados: ~{mkts}"
         await _send(chat_id, msg)
         return
+    approved = [opp for opp in opps if not getattr(opp, "manual_override", False)]
+    overrides = [opp for opp in opps if getattr(opp, "manual_override", False)]
     note = " (candidatos rejeitados — somente revisão)" if stats.get("fallback") else ""
-    await _send(chat_id, f"✅ <b>{len(opps)} oportunidade(s)</b>{note}")
+    parts = []
+    if approved:
+        parts.append(f"{len(approved)} aprovada(s)")
+    if overrides:
+        parts.append(f"{len(overrides)} para confirmação manual")
+    summary = " + ".join(parts) if parts else f"{len(opps)} oportunidade(s)"
+    await _send(chat_id, f"✅ <b>{summary}</b>{note}")
     for opp in opps:
+        if getattr(opp, "manual_override", False):
+            mark_override_notified(opp.opp_id, getattr(opp, "kickoff", ""))
         await _send(chat_id, _format_opp(opp), _opp_keyboard(opp))
 
 

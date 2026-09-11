@@ -194,48 +194,45 @@ class StakeSettingsTests(unittest.TestCase):
 
 
 class RiskExposureTests(unittest.TestCase):
-    def test_daily_limit_70_allows_full_wallet_and_blocks_more(self):
+    def test_total_exposure_blocks_without_concurrent_cap(self):
         original_active = risk_manager.ACTIVE_BETS_FILE
         original_daily = risk_manager.DAILY_PL_FILE
         try:
             with tempfile.TemporaryDirectory() as temp:
                 risk_manager.ACTIVE_BETS_FILE = Path(temp) / "active.json"
                 risk_manager.DAILY_PL_FILE = Path(temp) / "daily.json"
-                opp = {
-                    "opp_id": "wallet",
-                    "bet_key": "combo_u105_u45",
-                    "market_id": "corner",
+                first = {
+                    "opp_id": "one",
+                    "bet_key": "corners_105",
+                    "market_id": "m1",
                     "selection_id": 1,
-                    "event_id": "event-1",
+                    "event_id": "e1",
                     "home": "A",
                     "away": "B",
                     "model_probability": 0.8,
                     "ev_pct": 3.0,
-                    "stake": 70,
-                    "leg_stakes": [35, 35],
-                    "legs": [
-                        {"market_id": "corner", "selection_id": 1, "odds": 1.6},
-                        {"market_id": "goal", "selection_id": 2, "odds": 1.35},
-                    ],
+                    "stake": 20,
+                    "leg_stakes": [20],
                 }
-                ok, reason = risk_manager.can_bet(opp)
+                ok, reason = risk_manager.can_bet(first)
                 self.assertTrue(ok, reason)
-                risk_manager.record_bet(opp, "b1,b2", leg_stakes=[35, 35])
-                extra = {
-                    **opp,
-                    "opp_id": "extra",
-                    "event_id": "event-2",
-                    "market_id": "other",
-                    "legs": [{"market_id": "other", "selection_id": 3, "odds": 1.5}],
-                    "leg_stakes": [2],
-                    "stake": 2,
+                risk_manager.record_bet(first, "b1", leg_stakes=[20])
+                # Segundo jogo diferente ainda pode entrar (sem max concurrent).
+                second = {
+                    **first,
+                    "opp_id": "two",
+                    "market_id": "m2",
+                    "event_id": "e2",
+                    "home": "C",
+                    "away": "D",
                 }
-                blocked, blocked_reason = risk_manager.can_bet(extra)
+                ok2, reason2 = risk_manager.can_bet(second)
+                self.assertTrue(ok2, reason2)
+                # Mesmo mercado não pode.
+                dup = {**first, "opp_id": "dup"}
+                blocked, blocked_reason = risk_manager.can_bet(dup)
                 self.assertFalse(blocked)
-                self.assertTrue(
-                    "Exposição" in blocked_reason or "perda diária" in blocked_reason,
-                    blocked_reason,
-                )
+                self.assertIn("mercado", blocked_reason)
         finally:
             risk_manager.ACTIVE_BETS_FILE = original_active
             risk_manager.DAILY_PL_FILE = original_daily
@@ -530,6 +527,82 @@ class LedgerTests(unittest.TestCase):
                 ],
             )
             self.assertAlmostEqual(second, -1.4)
+
+
+class QualityOverrideTests(unittest.TestCase):
+    def test_quality_override_builds_pending_fields(self):
+        scanner = OpportunityScanner(
+            betfair_api=None,
+            api_football=None,  # type: ignore[arg-type]
+            groq_key="",
+            stake=20.0,
+            active_strategy="corners_105",
+            filter_mode="semi",
+        )
+        mkt = {
+            "marketId": "1.999",
+            "marketStartTime": "2026-09-11T18:45:00.000Z",
+            "event": {"id": "e1", "name": "Venezia v Fiorentina"},
+            "competition": {"name": "Italian Serie A"},
+        }
+        profile = {
+            "key": "corners_105",
+            "label": "Menos 10.5 escanteios",
+            "stake": 20.0,
+            "min_odds": 1.40,
+            "max_odds": 1.73,
+            "commission_rate": 0.065,
+            "sport": "football",
+        }
+        opp = scanner._quality_override_from(
+            mkt, profile, "Venezia", "Fiorentina", "Italian Serie A",
+            10, "Under 10.5 Corners", 1.26, "wrong_odds",
+            back_size=6899.0, lay_price=1.47, spread_pct=13.0,
+        )
+        self.assertIsNotNone(opp)
+        assert opp is not None
+        self.assertTrue(opp.manual_override)
+        self.assertEqual(opp.reject_reason, "wrong_odds")
+        self.assertEqual(opp.bet_key, "corners_105")
+        self.assertIn("Override", opp.bet_type)
+        self.assertAlmostEqual(opp.odds, 1.26)
+        self.assertIn("fora da faixa", opp.reasoning)
+
+    def test_can_bet_allows_manual_override_without_ev(self):
+        original_active = risk_manager.ACTIVE_BETS_FILE
+        original_daily = risk_manager.DAILY_PL_FILE
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                risk_manager.ACTIVE_BETS_FILE = Path(temp) / "active.json"
+                risk_manager.DAILY_PL_FILE = Path(temp) / "daily.json"
+                opp = {
+                    "opp_id": "ov1",
+                    "bet_key": "corners_105",
+                    "market_id": "m-ov",
+                    "selection_id": 10,
+                    "stake": 20,
+                    "leg_stakes": [20],
+                    "manual_override": True,
+                    "odds": 1.26,
+                }
+                ok, reason = risk_manager.can_bet(opp)
+                self.assertTrue(ok, reason)
+        finally:
+            risk_manager.ACTIVE_BETS_FILE = original_active
+            risk_manager.DAILY_PL_FILE = original_daily
+
+    def test_override_notify_dedupe(self):
+        import opportunity_scanner as osmod
+
+        original = osmod.OVERRIDE_NOTIFY_FILE
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                osmod.OVERRIDE_NOTIFY_FILE = str(Path(temp) / "notified.json")
+                self.assertFalse(osmod.was_override_notified("abc"))
+                osmod.mark_override_notified("abc", "2026-09-12T18:00:00+00:00")
+                self.assertTrue(osmod.was_override_notified("abc"))
+        finally:
+            osmod.OVERRIDE_NOTIFY_FILE = original
 
 
 class BacktestTests(unittest.TestCase):
