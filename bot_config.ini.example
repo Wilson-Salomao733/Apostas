@@ -54,8 +54,8 @@ fallback_single_stake = 2.0
 [under45]
 ; Simples: Menos 4.5 gols — só ligas de poucos gols
 stake = 20.0
-min_odds = 1.30
-max_odds = 1.40
+min_odds = 1.12
+max_odds = 1.30
 favorite_min_odds = 1.40
 use_u45_allowlist = true
 require_stats = true

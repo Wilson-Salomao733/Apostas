@@ -68,3 +68,5 @@ Thumbs.db
 # Backup files
 *.backup
 *.bak
+
+.env.erica

@@ -11,6 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TimedOut, NetworkError, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -279,14 +280,26 @@ def _format_opp(opp: Opportunity) -> str:
     return "\n".join(lines)
 
 
-async def _send(chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
-    if _app and _app.bot:
-        await _app.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup or main_keyboard(),
-        )
+async def _send(chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None) -> bool:
+    if not (_app and _app.bot):
+        return False
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            await _app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup or main_keyboard(),
+            )
+            return True
+        except (TimedOut, NetworkError, TelegramError, OSError) as exc:
+            last_error = exc
+            log.warning("Telegram send tentativa %s/3 falhou: %s", attempt, exc)
+            await asyncio.sleep(1.5 * attempt)
+    if last_error:
+        log.error("Telegram send desistiu: %s", last_error)
+    return False
 
 
 def _sync_notify(text: str, _markup: dict | None) -> None:
@@ -377,8 +390,23 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _guard(update):
         return
     query = update.callback_query
-    await query.answer()
     data = query.data or ""
+    # Timeout no answer() não pode abortar a aposta.
+    try:
+        await query.answer()
+    except (TimedOut, NetworkError, TelegramError) as exc:
+        log.warning("Falha ao responder callback (%s): %s", data[:40], exc)
+
+    async def _reply(text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+        kb = markup or main_keyboard()
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception as exc:
+            log.warning("edit_message_text falhou: %s", exc)
+        chat_id = query.message.chat_id if query.message else _allowed_chat()
+        if chat_id:
+            await _send(chat_id, text, kb)
 
     if data == "noop":
         return
@@ -387,59 +415,58 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         opp_id = data.split(":", 1)[1]
         pending = OpportunityScanner.load_pending(opp_id) or {}
         mark_override_notified(opp_id, str(pending.get("kickoff", "")), ignored=True)
-        await query.edit_message_text(
-            "⏭ Ignorado — não vou reenviar este mercado.",
-            reply_markup=main_keyboard(),
-        )
+        await _reply("⏭ Ignorado — não vou reenviar este mercado.")
         return
 
     if data == "menu":
-        await query.edit_message_text(
-            MENU_TEXT, parse_mode="HTML", reply_markup=main_keyboard(),
-        )
+        await _reply(MENU_TEXT)
         return
 
     if data == "stakes":
-        await query.edit_message_text(
-            _stakes_text(), parse_mode="HTML", reply_markup=stake_keyboard(),
-        )
+        await _reply(_stakes_text(), stake_keyboard())
         return
 
     if data.startswith("stake:choose:"):
         _, _, kind, raw_value = data.split(":", 3)
         value = float(raw_value)
         if needs_stake_confirmation(value):
-            await query.edit_message_text(
+            await _reply(
                 f"⚠️ Confirme o valor de <b>R$ {value:.2f}</b>.",
-                parse_mode="HTML",
-                reply_markup=_stake_confirmation(kind, value),
+                _stake_confirmation(kind, value),
             )
         else:
             save_stake(kind, value)
-            await query.edit_message_text(
-                _stakes_text(), parse_mode="HTML", reply_markup=stake_keyboard(),
-            )
+            await _reply(_stakes_text(), stake_keyboard())
         return
 
     if data.startswith("stake:confirm:"):
         _, _, kind, raw_value = data.split(":", 3)
         save_stake(kind, float(raw_value))
-        await query.edit_message_text(
-            _stakes_text(), parse_mode="HTML", reply_markup=stake_keyboard(),
-        )
+        await _reply(_stakes_text(), stake_keyboard())
         return
 
     if data == "scan":
-        await query.edit_message_text("🔍 <b>Varredura iniciada...</b>", parse_mode="HTML")
-        loop = asyncio.get_event_loop()
-        opps, stats = await loop.run_in_executor(None, _worker.run_scan_once if _worker else _manual_scan)
-        await _send_scan_results(query.message.chat_id, opps, stats)
+        chat_id = query.message.chat_id if query.message else _allowed_chat()
+        # Não depende do Telegram estar respondendo para rodar a varredura.
+        await _reply("🔍 <b>Varredura iniciada...</b>")
+        loop = asyncio.get_running_loop()
+        try:
+            opps, stats = await loop.run_in_executor(
+                None, _worker.run_scan_once if _worker else _manual_scan,
+            )
+        except Exception as exc:
+            log.exception("Varredura manual falhou")
+            if chat_id:
+                await _send(chat_id, f"❌ Erro na varredura: {exc}")
+            return
+        if chat_id:
+            await _send_scan_results(chat_id, opps, stats)
         return
 
     if data == "balance":
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _fetch_balance)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=main_keyboard())
+        await _reply(text)
         return
 
     if data == "status":
@@ -449,7 +476,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"Estratégia: {combo_label(get_active_strategy())}\n\n"
             f"{status_summary()}"
         )
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=main_keyboard())
+        await _reply(text)
         return
 
     if data.startswith("mode:"):
@@ -457,11 +484,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if mode in VALID_MODES:
             save_mode(mode)
             strat = combo_label(get_active_strategy())
-            await query.edit_message_text(
+            await _reply(
                 f"Modo alterado: <b>{_mode_label(mode)}</b>\n"
                 f"Estratégia ativa: <b>{strat}</b>",
-                parse_mode="HTML",
-                reply_markup=main_keyboard(),
             )
         return
 
@@ -482,19 +507,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     "com spread até 10%. U4.5 só em ligas de poucos gols "
                     "e favorito ≥ 1.40."
                 )
-            await query.edit_message_text(
-                f"Estratégia: <b>{combo_label(key)}</b>{hint}",
-                parse_mode="HTML",
-                reply_markup=main_keyboard(),
-            )
+            await _reply(f"Estratégia: <b>{combo_label(key)}</b>{hint}")
         return
 
     if data.startswith("bet:"):
         opp_id = data.split(":", 1)[1]
-        loop = asyncio.get_event_loop()
+        chat_id = query.message.chat_id if query.message else _allowed_chat()
+        if chat_id:
+            try:
+                await _send(chat_id, f"⏳ Apostando <code>{opp_id}</code>...")
+            except Exception as exc:
+                log.warning("Aviso de aposta falhou: %s", exc)
+        loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _place_bet, opp_id)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=main_keyboard())
-
+        log.info("Resultado bet:%s -> %s", opp_id, text[:120])
+        await _reply(text)
+        return
 
 def _manual_scan():
     from auto_worker import AutoWorker
@@ -591,12 +619,27 @@ def main() -> None:
     _worker = AutoWorker(bf, _sync_notify, _sync_notify_opp)
     _worker.start()
 
-    _app = (
+    builder = (
         Application.builder()
         .token(token)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .get_updates_connect_timeout(30.0)
+        .get_updates_read_timeout(40.0)
         .post_init(_post_init)
-        .build()
     )
+    proxy = (
+        os.getenv("TELEGRAM_PROXY")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("HTTP_PROXY")
+        or ""
+    ).strip()
+    if proxy:
+        builder = builder.proxy(proxy).get_updates_proxy(proxy)
+        log.info("Telegram usando proxy configurado")
+    _app = builder.build()
     _app.add_handler(CommandHandler("start", cmd_start))
     _app.add_handler(CommandHandler("menu", cmd_start))
     _app.add_handler(CommandHandler("stake_corners", cmd_stake_corners))

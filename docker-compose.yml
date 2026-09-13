@@ -18,3 +18,24 @@ services:
       - TZ=America/Sao_Paulo
       - SCAN_MAX_PER_TYPE=50
       - SCAN_MAX_RESULTS=6
+
+  apostas-bot-erica:
+    build: .
+    container_name: apostas-bot-erica
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    env_file:
+      - .env
+      - .env.erica
+    volumes:
+      - ./config_erica.ini:/app/config.ini:ro
+      - ./bot_config_erica.ini:/app/bot_config.ini:ro
+      - ./certs:/app/certs:ro
+      - ./data_erica:/app/data
+      - ./session_token_erica.txt:/app/session_token.txt
+    environment:
+      - TZ=America/Sao_Paulo
+      - SCAN_MAX_PER_TYPE=50
+      - SCAN_MAX_RESULTS=6
